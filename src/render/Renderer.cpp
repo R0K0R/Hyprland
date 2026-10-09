@@ -2082,7 +2082,9 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
     // tearing and DS first
     bool       shouldTear              = pMonitor->updateTearing();
-    const bool canAttemptDirectScanout = pMonitor->canAttemptDirectScanoutFast();
+    // Dock keystone overview (mission control): never direct-scanout a client buffer while
+    // the overview overlay is up, or it would bypass the compositor and hide the thumbnails.
+    const bool canAttemptDirectScanout = !(m_ksOverviewActive || m_ksOverviewProgress > 0.001f) && pMonitor->canAttemptDirectScanoutFast();
 
     if (canAttemptDirectScanout) {
         if (pMonitor->attemptDirectScanout()) {
@@ -2168,7 +2170,9 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
     bool renderCursor = true;
 
-    if (pMonitor->m_solitaryClient && (!finalDamage.empty() || *PSOLDAMAGE))
+    // Dock keystone overview: the solitary-client fast path renders only the one fullscreen
+    // window and skips the workspace -- bypass it while the overview overlay is up.
+    if (!(m_ksOverviewActive || m_ksOverviewProgress > 0.001f) && pMonitor->m_solitaryClient && (!finalDamage.empty() || *PSOLDAMAGE))
         renderWindow(pMonitor->m_solitaryClient.lock(), pMonitor, NOW, false, RENDER_PASS_MAIN /* solitary = no popups */);
     else if (!finalDamage.empty()) {
         if (pMonitor->isMirror()) {
@@ -2180,6 +2184,11 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
         } else {
             CBox renderBox = {0, 0, sc<int>(pMonitor->m_pixelSize.x), sc<int>(pMonitor->m_pixelSize.y)};
             renderWorkspace(pMonitor, pMonitor->m_activeWorkspace, NOW, renderBox);
+            // Mission-control overview: an OVERLAY on the live workspace -- dim the real wallpaper
+            // and draw every window as a scaled snapshot tile (incl. ones on OTHER workspaces).
+            // Kept rendering through the close fade (progress > 0) so it isn't a hard cut.
+            if ((m_ksOverviewActive || m_ksOverviewProgress > 0.001F) && pMonitor == Desktop::focusState()->monitor())
+                renderOverview(pMonitor);
             renderLockscreen(pMonitor, NOW, renderBox);
 
             // render IME even above the lockscreen - allow the user to use it to potentially input stuff on it.
@@ -3230,6 +3239,128 @@ SP<IFramebuffer> IHyprRenderer::makeSnapshotFB(WP<Desktop::View::CPopup> popup) 
 
     m_bRenderingSnapshot = false;
     return PFRAMEBUFFER;
+}
+
+// ======================= Dock keystone: mission-control overview (expo) =======================
+// trapezoid.patch (my.sidedock). SUPER+E -> ksOverviewToggle() collects EVERY mapped, non-pinned
+// window across ALL workspaces. While active, renderMonitor() draws the live workspace then calls
+// renderOverview() as an OVERLAY: dim the real wallpaper + draw each window's live surface TEXTURE
+// into a grid tile. Texture-direct, NOT a renderWindow snapshot: off-workspace windows render
+// blank through renderWindow (their workspace is slid off-screen AND its alpha is 0), but the last
+// committed buffer texture is retained, so drawing it directly works for any workspace -- and it's
+// live. A click (ksOverviewSelectAt) jumps to the tile's workspace + focuses it, then closes.
+void IHyprRenderer::ksOverviewToggle() {
+    m_ksOverviewActive = !m_ksOverviewActive;
+    if (m_ksOverviewActive) {
+        m_ksOverviewTiles.clear();
+        for (auto const& w : Desktop::windowState()->windows()) {
+            if (!w || !w->m_isMapped || w->isHidden())
+                continue;
+            if (w->m_pinned) // the side-dock & pinned overlays are always on screen -- skip them
+                continue;
+            SKsOverviewTile tile;
+            tile.window = w;
+            m_ksOverviewTiles.emplace_back(std::move(tile));
+        }
+        if (m_ksOverviewTiles.empty())
+            m_ksOverviewActive = false;
+    }
+    // on close, tiles are kept until the fade-out finishes (renderOverview clears them)
+    for (auto const& m : State::monitorState()->monitors())
+        damageMonitor(m);
+}
+
+void IHyprRenderer::renderOverview(PHLMONITOR pMonitor) {
+    // Step the open/close fade (per frame; a frame is requested below while animating). The
+    // live workspace was already drawn by renderMonitor, so this is an OVERLAY: dim it + tiles.
+    const float STEP = 0.08F;
+    if (m_ksOverviewActive)
+        m_ksOverviewProgress = std::min(1.0F, m_ksOverviewProgress + STEP);
+    else
+        m_ksOverviewProgress = std::max(0.0F, m_ksOverviewProgress - STEP);
+    if (!m_ksOverviewActive && m_ksOverviewProgress <= 0.001F) {
+        m_ksOverviewTiles.clear(); // fully closed -> free the snapshots
+        return;
+    }
+    const float    p  = m_ksOverviewProgress;
+    const float    e  = p * p * (3.0F - 2.0F * p); // smoothstep ease
+    const Vector2D MS = pMonitor->m_transformedSize;
+    // Dim the real desktop (which is rendered underneath) -- so the backdrop is the CURRENT
+    // wallpaper, darkened, not a flat black fill.
+    {
+        CRectPassElement::SRectData d;
+        d.box   = {0, 0, MS.x, MS.y};
+        d.color = CHyprColor(0.0F, 0.0F, 0.0F, 0.72F * e);
+        m_renderPass.add(makeUnique<CRectPassElement>(d));
+    }
+    const int N = sc<int>(m_ksOverviewTiles.size());
+    if (N > 0) {
+        const int   cols  = std::max(1, sc<int>(std::ceil(std::sqrt(sc<float>(N)))));
+        const int   rows  = std::max(1, sc<int>(std::ceil(sc<float>(N) / sc<float>(cols))));
+        const float cellW = sc<float>(MS.x) / sc<float>(cols);
+        const float cellH = sc<float>(MS.y) / sc<float>(rows);
+        CRegion     fakeDamage{0, 0, sc<int>(MS.x), sc<int>(MS.y)};
+        for (int i = 0; i < N; ++i) {
+            auto&      tile = m_ksOverviewTiles[i];
+            const auto win  = tile.window.lock();
+            if (!win)
+                continue;
+            const auto wls  = win->wlSurface();
+            const auto surf = wls ? wls->resource() : nullptr;
+            if (!surf || !surf->m_current.texture) // no live buffer -> nothing to show
+                continue;
+            const int      cx   = i % cols;
+            const int      cy   = i / cols;
+            const float    padX = cellW * 0.04F, padY = cellH * 0.04F;
+            const CBox     cell{cx * cellW + padX, cy * cellH + padY, cellW - 2.F * padX, cellH - 2.F * padY};
+            // Aspect-fit the window into its cell using the window's logical dimensions.
+            const Vector2D wd = win->size(Desktop::View::IGeometric::GEOMETRIC_GOAL);
+            if (wd.x <= 0 || wd.y <= 0)
+                continue;
+            const float ar = sc<float>(wd.x) / sc<float>(wd.y);
+            float       tw = sc<float>(cell.w), th = tw / ar;
+            if (th > sc<float>(cell.h)) {
+                th = sc<float>(cell.h);
+                tw = th * ar;
+            }
+            const CBox box{cell.x + (sc<double>(cell.w) - tw) / 2.0, cell.y + (sc<double>(cell.h) - th) / 2.0, sc<double>(tw), sc<double>(th)};
+            tile.box = box; // for click hit-test
+            // Draw the window's LIVE surface texture straight into the tile -- works for any
+            // workspace (the last committed buffer is retained even when the window is hidden),
+            // and updates live. Alpha = the open/close fade.
+            CTexPassElement::SRenderData d;
+            d.tex    = surf->m_current.texture;
+            d.box    = box;
+            d.a      = e;
+            d.damage = fakeDamage;
+            m_renderPass.add(makeUnique<CTexPassElement>(std::move(d)));
+        }
+    }
+    // keep requesting frames until the fade settles
+    if ((m_ksOverviewActive && m_ksOverviewProgress < 1.0F) || (!m_ksOverviewActive && m_ksOverviewProgress > 0.0F))
+        damageMonitor(pMonitor);
+}
+
+bool IHyprRenderer::ksOverviewSelectAt(const Vector2D& coords) {
+    if (!m_ksOverviewActive)
+        return false;
+    const auto PMON = Desktop::focusState()->monitor();
+    if (PMON) {
+        const Vector2D p = (coords - PMON->m_position) * PMON->m_scale; // logical global -> physical monitor-local
+        for (auto& tile : m_ksOverviewTiles) {
+            if (!tile.box.containsPoint(p))
+                continue;
+            if (const auto win = tile.window.lock(); win) {
+                // the picked window may be on another workspace -> jump there, then focus it
+                if (const auto WS = win->m_workspace; WS && WS->m_monitor)
+                    WS->m_monitor->changeWorkspace(WS);
+                Desktop::focusState()->fullWindowFocus(win, Desktop::FOCUS_REASON_CLICK);
+            }
+            break;
+        }
+    }
+    ksOverviewToggle(); // begin the close (active -> false; tiles persist for the fade-out)
+    return true;
 }
 
 void IHyprRenderer::renderFadeouts(PHLMONITOR monitor, Desktop::eFadeoutPlane plane, PHLWORKSPACE workspace) {

@@ -101,6 +101,20 @@ namespace Render {
         SP<IFramebuffer>                    makeSnapshotFB(WP<Desktop::View::CPopup>);
         void                                renderFadeouts(PHLMONITOR monitor, Desktop::eFadeoutPlane plane, PHLWORKSPACE workspace = nullptr);
         bool                                beginFullFakeRender(PHLMONITOR pMonitor, CRegion& damage, SP<IFramebuffer> fb);
+
+        // Dock keystone: mission-control overview / expo (my.sidedock, trapezoid.patch). A
+        // 5-finger gesture toggles it; renderMonitor() draws renderOverview() in its place; a
+        // click picks a tile. Snapshots captured on open, held here. See Renderer.cpp.
+        struct SKsOverviewTile {
+            PHLWINDOWREF window;
+            CBox         box; // on-screen tile rect (physical, monitor-local); set by renderOverview
+        };
+        bool                                m_ksOverviewActive   = false;
+        float                               m_ksOverviewProgress = 0.f; // open/close fade 0..1 (stepped per frame)
+        std::vector<SKsOverviewTile>        m_ksOverviewTiles;
+        void                                ksOverviewToggle();
+        void                                renderOverview(PHLMONITOR pMonitor);
+        bool                                ksOverviewSelectAt(const Vector2D& coords);
         bool                                beginRenderToBuffer(PHLMONITOR pMonitor, CRegion& damage, SP<IHLBuffer> buffer, bool simple = false);
         virtual void                        startRenderPass() {};
         virtual void                        endRender(const std::function<void()>& renderingDoneCallback = {}) = 0;
