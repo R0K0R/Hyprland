@@ -159,6 +159,12 @@ enum eShaderUniform : uint8_t {
     SHADER_HAZE_IRIDESCENCE,
     SHADER_HAZE_TRANSFER_FUNCTION,
 
+    // dock keystone: rounded-corner radius (px) + window size, for surface.frag's
+    // anti-aliased trapezoid coverage (keystoneCoverage). 0 radius = off.
+    SHADER_KEYSTONE_ROUND,
+    SHADER_KEYSTONE_SIZE,
+    SHADER_KS_SCREEN_UV,
+
     SHADER_LAST,
 };
 

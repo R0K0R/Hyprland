@@ -174,6 +174,21 @@ SShadowRenderData CHyprDropShadowDecoration::getRenderData(Render::CRenderContex
     static auto PSHADOWSCALE  = CConfigValue<Config::FLOAT>("decoration:shadow:scale");
     static auto PSHADOWOFFSET = CConfigValue<Config::VEC2>("decoration:shadow:offset");
 
+    // Dock keystone (my.sidedock): dock-tagged windows get their OWN, larger + offset drop
+    // shadow so the trapezoid reads as "floating", WITHOUT inflating every window's shadow.
+    // This only sizes/positions the shadow BOX; renderRoundedShadow() then warps that box to
+    // the trapezoid (ksDockKeystone). Falls back to the global shadow when the dock range is
+    // 0, and is live-tunable (decoration:keystone_shadow_*) exactly like keystone_inset.
+    static auto PKSSHADOWRANGE = CConfigValue<Config::INTEGER>("decoration:keystone_shadow_range");
+    static auto PKSSHADOWDX    = CConfigValue<Config::FLOAT>("decoration:keystone_shadow_dx");
+    static auto PKSSHADOWDY    = CConfigValue<Config::FLOAT>("decoration:keystone_shadow_dy");
+    auto        ksShadowSize   = *PSHADOWSIZE; // Config::INTEGER (int64), same type as the fallback
+    Vector2D    ksShadowOffset = {(*PSHADOWOFFSET).x, (*PSHADOWOFFSET).y};
+    if (*PKSSHADOWRANGE > 0 && PWINDOW->m_ruleApplicator && PWINDOW->m_ruleApplicator->m_tagKeeper.isTagged("dock", false)) {
+        ksShadowSize   = *PKSSHADOWRANGE;
+        ksShadowOffset = {*PKSSHADOWDX, *PKSSHADOWDY};
+    }
+
     const auto  BORDERSIZE       = PWINDOW->presentation().borderSize();
     const auto  ROUNDINGBASE     = PWINDOW->presentation().rounding();
     const auto  ROUNDINGPOWER    = PWINDOW->presentation().roundingPower();
@@ -184,15 +199,15 @@ SShadowRenderData CHyprDropShadowDecoration::getRenderData(Render::CRenderContex
     // draw the shadow
     CBox fullBox = m_lastWindowBoxWithDecos;
     fullBox.translate(-pMonitor->m_position + WORKSPACEOFFSET);
-    fullBox.x -= *PSHADOWSIZE;
-    fullBox.y -= *PSHADOWSIZE;
-    fullBox.w += 2 * *PSHADOWSIZE;
-    fullBox.h += 2 * *PSHADOWSIZE;
+    fullBox.x -= ksShadowSize;
+    fullBox.y -= ksShadowSize;
+    fullBox.w += 2 * ksShadowSize;
+    fullBox.h += 2 * ksShadowSize;
 
     const float SHADOWSCALE = std::clamp(*PSHADOWSCALE, 0.f, 1.f);
 
     // scale the box in relation to the center of the box
-    fullBox.scaleFromCenter(SHADOWSCALE).translate({(*PSHADOWOFFSET).x, (*PSHADOWOFFSET).y});
+    fullBox.scaleFromCenter(SHADOWSCALE).translate({ksShadowOffset.x, ksShadowOffset.y});
 
     updateWindow(PWINDOW);
     m_lastWindowPos += WORKSPACEOFFSET;
@@ -223,7 +238,7 @@ SShadowRenderData CHyprDropShadowDecoration::getRenderData(Render::CRenderContex
         .fullBox       = fullBox,
         .rounding      = ROUNDING,
         .roundingPower = ROUNDINGPOWER,
-        .size          = *PSHADOWSIZE,
+        .size          = ksShadowSize,
     };
 }
 

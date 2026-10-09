@@ -28,7 +28,11 @@ static bool shouldBlurWindow(PHLWINDOW window) {
     if (!*PBLUR)
         return false;
 
-    if (window->m_ruleApplicator->noBlur().valueOrDefault() || window->m_ruleApplicator->RGBX().valueOrDefault() || window->presentation().opaque())
+    // dock keystone: same rule as CWindow::shouldBlur, so a fading dock card keeps its
+    // frosted backdrop behind the rounded-off corners instead of flashing them black.
+    const bool ISDOCK = window->m_ruleApplicator && window->m_ruleApplicator->m_tagKeeper.isTagged("dock", false);
+    if (window->m_ruleApplicator->noBlur().valueOrDefault() ||
+        (!ISDOCK && (window->m_ruleApplicator->RGBX().valueOrDefault() || window->presentation().opaque())))
         return false;
 
     auto surface = window->wlSurface();

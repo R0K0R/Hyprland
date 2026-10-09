@@ -632,7 +632,16 @@ bool CWindow::shouldBlur(const Render::SWindowRenderPresentation& presentation) 
     if (!*PBLUR)
         return false;
 
-    const bool DONT_BLUR = m_ruleApplicator->noBlur().valueOrDefault() || m_ruleApplicator->RGBX().valueOrDefault() || this->presentation().opaque(presentation);
+    // dock keystone: force a blur pass on dock windows even when they're opaque/RGBX. An
+    // opaque window normally gets NO blur pass and is treated as a full occluder, so nothing
+    // is composited behind it -- and when the keystone rounds its corners there is nothing
+    // there, so they render black (this bit easyeffects, an opaque XRGB GTK4 app; every
+    // other dock app is ARGB and composites cleanly). Forcing blur keeps a frosted backdrop
+    // behind the window, so the rounded-off corners show frost instead of black. An explicit
+    // no_blur rule still wins (it's off for dock windows -- see features/sidedock).
+    const bool ISDOCK    = m_ruleApplicator && m_ruleApplicator->m_tagKeeper.isTagged("dock", false);
+    const bool DONT_BLUR = m_ruleApplicator->noBlur().valueOrDefault() ||
+        (!ISDOCK && (m_ruleApplicator->RGBX().valueOrDefault() || this->presentation().opaque(presentation)));
     if (DONT_BLUR)
         return false;
 
