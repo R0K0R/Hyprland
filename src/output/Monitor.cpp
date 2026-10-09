@@ -699,6 +699,7 @@ bool CMonitor::applyMonitorRuleSoft(Config::CMonitorRule&& pMonitorRule) {
     Vector2D xfmd     = m_transform % 2 == 1 ? Vector2D{m_pixelSize.y, m_pixelSize.x} : m_pixelSize;
     m_size            = (xfmd / m_scale).round();
     m_transformedSize = xfmd;
+    m_size            = (xfmd / m_scale).round();
 
     if (m_createdByUser) {
         CBox transformedBox = {0, 0, m_transformedSize.x, m_transformedSize.y};
