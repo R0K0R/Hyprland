@@ -19,6 +19,8 @@ extern "C" {
 #include <lua.h>
 }
 
+struct SEventLoopDoLaterLock;
+
 namespace Config::Lua {
     class CLuaCaller;
 
@@ -57,6 +59,7 @@ namespace Config::Lua {
         uint64_t                                               m_nextHandle = 1;
         std::vector<CHyprSignalListener>                       m_listeners;
         std::unordered_map<std::string, CHyprSignalListener>   m_pluginListeners;
+        UP<SEventLoopDoLaterLock>                              m_tabletTipLater; // input.tablet.tip, after the cursor warp
 
         void                                                   dispatch(const std::string& name, int nargs, const std::function<void(lua_State*)>& pushArgs);
     };
