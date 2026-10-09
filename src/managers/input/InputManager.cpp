@@ -922,9 +922,6 @@ void CInputManager::processMouseDownNormal(const IPointer::SButtonEvent& e, SP<I
     const auto  PASS              = g_pKeybindManager->onMouseEvent(e, mouse);
     static auto PFOLLOWMOUSE      = CConfigValue<Config::INTEGER>("input:follow_mouse");
     static auto PRESIZEONBORDER   = CConfigValue<Config::INTEGER>("general:resize_on_border");
-    static auto PBORDERSIZE       = CConfigValue<Config::INTEGER>("general:border_size");
-    static auto PBORDERGRABEXTEND = CConfigValue<Config::INTEGER>("general:extend_border_grab_area");
-    const auto  BORDER_GRAB_AREA  = *PRESIZEONBORDER ? *PBORDERSIZE + *PBORDERGRABEXTEND : 0;
 
     if (!PASS && !*PPASSMOUSE)
         return;
@@ -938,14 +935,9 @@ void CInputManager::processMouseDownNormal(const IPointer::SButtonEvent& e, SP<I
     // clicking on border triggers resize
     // TODO detect click on LS properly
     if (*PRESIZEONBORDER && !g_pSessionLockManager->isSessionLocked() && !m_lastFocusOnLS && e.state == WL_POINTER_BUTTON_STATE_PRESSED && (!w || !w->isX11OverrideRedirect())) {
-        if (w && !Fullscreen::controller()->isFullscreen(w)) {
-            const CBox real = w->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
-            const CBox grab = {real.x - BORDER_GRAB_AREA, real.y - BORDER_GRAB_AREA, real.width + 2 * BORDER_GRAB_AREA, real.height + 2 * BORDER_GRAB_AREA};
-
-            if ((grab.containsPoint(mouseCoords) && (!real.containsPoint(mouseCoords) || w->isInCurvedCorner(mouseCoords.x, mouseCoords.y))) && !w->hasPopupAt(mouseCoords)) {
-                g_pKeybindManager->resizeWithBorder(e);
-                return;
-            }
+        if (isOnResizeBorder(w, mouseCoords)) {
+            g_pKeybindManager->resizeWithBorder(e);
+            return;
         }
     }
 
@@ -994,6 +986,48 @@ void CInputManager::processMouseDownNormal(const IPointer::SButtonEvent& e, SP<I
         simulateMouseMovement();
         m_hardInput = false;
     }
+}
+
+bool CInputManager::isOnResizeBorder(PHLWINDOW w, const Vector2D& coords) {
+    static auto PRESIZEONBORDER = CConfigValue<Config::INTEGER>("general:resize_on_border");
+    static auto PBORDERSIZE     = CConfigValue<Config::INTEGER>("general:border_size");
+    if (!*PRESIZEONBORDER || !w || w->isX11OverrideRedirect() || Fullscreen::controller()->isFullscreen(w))
+        return false;
+
+    const int  AREA = sc<int>(*PBORDERSIZE) + Desktop::viewState()->hitTest().borderGrabExtend(w);
+    const CBox real = w->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+    const CBox grab = {real.x - AREA, real.y - AREA, real.width + 2 * AREA, real.height + 2 * AREA};
+    // dock keystone: test in the card's unwarped frame, so the grab zone follows the
+    // drawn trapezoid's edges rather than the flat box (identity for other windows)
+    const auto MC = Desktop::viewState()->hitTest().keystoneUnwarpGlobal(coords, w);
+
+    return grab.containsPoint(MC) && (!real.containsPoint(MC) || w->isInCurvedCorner(MC.x, MC.y)) && !w->hasPopupAt(coords);
+}
+
+bool CInputManager::beginBorderResizeAt(const Vector2D& coords) {
+    // callers have just refocus()ed at coords, so a layer surface there (a bar, a panel)
+    // shows up here and takes the press instead
+    if (g_pSessionLockManager->isSessionLocked() || !m_foundLSToFocus.expired() || g_layoutManager->dragController()->target())
+        return false;
+
+    const auto w = Desktop::viewState()->hitTest().windowAt(coords, Desktop::View::ALLOW_FLOATING | Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS);
+    if (!isOnResizeBorder(w, coords))
+        return false;
+
+    // the drag starts from the cursor, and changeMouseBindMode finds the window there
+    Pointer::mgr()->warpTo(coords);
+    CKeybindManager::changeMouseBindMode(MBIND_RESIZE);
+    return g_layoutManager->dragController()->target() != nullptr;
+}
+
+void CInputManager::borderResizeMoveTo(const Vector2D& coords) {
+    Pointer::mgr()->warpTo(coords);
+    g_layoutManager->moveMouse(coords);
+}
+
+void CInputManager::endBorderResize() {
+    if (g_layoutManager->dragController()->target())
+        CKeybindManager::changeMouseBindMode(MBIND_INVALID);
 }
 
 void CInputManager::processMouseDownKill(const IPointer::SButtonEvent& e) {
@@ -2206,7 +2240,7 @@ void CInputManager::setCursorIconOnBorder(PHLWINDOW w) {
         return;
     }
 
-    static auto PEXTENDBORDERGRAB = CConfigValue<Config::INTEGER>("general:extend_border_grab_area");
+    const int   EXTENDBORDERGRAB  = Desktop::viewState()->hitTest().borderGrabExtend(w); // PiP / touch aware
     const int   BORDERSIZE        = w->getRealBorderSize();
     const int   ROUNDING          = w->rounding();
 
@@ -2216,8 +2250,8 @@ void CInputManager::setCursorIconOnBorder(PHLWINDOW w) {
     const auto           mouseCoords      = Desktop::viewState()->hitTest().keystoneUnwarpGlobal(getMouseCoordsInternal(), w);
     CBox                 box              = w->getWindowMainSurfaceBox();
     eBorderIconDirection direction        = BORDERICON_NONE;
-    CBox                 boxFullGrabInput = {box.x - *PEXTENDBORDERGRAB - BORDERSIZE, box.y - *PEXTENDBORDERGRAB - BORDERSIZE, box.width + 2 * (*PEXTENDBORDERGRAB + BORDERSIZE),
-                                             box.height + 2 * (*PEXTENDBORDERGRAB + BORDERSIZE)};
+    CBox                 boxFullGrabInput = {box.x - EXTENDBORDERGRAB - BORDERSIZE, box.y - EXTENDBORDERGRAB - BORDERSIZE, box.width + 2 * (EXTENDBORDERGRAB + BORDERSIZE),
+                                             box.height + 2 * (EXTENDBORDERGRAB + BORDERSIZE)};
 
     if (w->hasPopupAt(mouseCoords))
         direction = BORDERICON_NONE;

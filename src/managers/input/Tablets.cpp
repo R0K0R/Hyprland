@@ -208,6 +208,20 @@ void CInputManager::onTabletTip(CTablet::STipEvent e) {
     if (e.in)
         refocus();
 
+    // resize_on_border for the pen: a tip on a window's border grab zone starts the same
+    // resize a mouse press there would, and the tip never reaches the client. The tool is
+    // not marked down, so onTabletAxis keeps calling simulateMouseMovement(), which is what
+    // feeds the drag; tip up ends it.
+    if (e.in && beginBorderResizeAt(getMouseCoordsInternal())) {
+        m_tabletBorderResize = true;
+        return;
+    }
+    if (!e.in && m_tabletBorderResize) {
+        m_tabletBorderResize = false;
+        endBorderResize();
+        return;
+    }
+
     refocusTablet(PTAB, PTOOL, true);
 
     if (e.in)

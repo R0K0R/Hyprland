@@ -15,7 +15,9 @@
 #include "../../state/WorkspaceState.hpp"
 #include "../../xwayland/XWayland.hpp"
 #include "../../managers/fullscreen/FullscreenController.hpp"
+#include "../../managers/input/InputManager.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <ranges>
 #include <tuple>
@@ -34,11 +36,11 @@ PHLWINDOW CViewHitTester::windowAt(const Vector2D& pos, uint16_t properties, PHL
 
     static auto PRESIZEONBORDER       = CConfigValue<Config::INTEGER>("general:resize_on_border");
     static auto PBORDERSIZE           = CConfigValue<Config::INTEGER>("general:border_size");
-    static auto PBORDERGRABEXTEND     = CConfigValue<Config::INTEGER>("general:extend_border_grab_area");
     static auto PSPECIALFALLTHRU      = CConfigValue<Config::INTEGER>("input:special_fallthrough");
     static auto PMODALPARENTBLOCKING  = CConfigValue<Config::INTEGER>("general:modal_parent_blocking");
     static auto PFOLLOWMOUSESHRINK    = CConfigValue<Config::INTEGER>("input:follow_mouse_shrink");
-    const auto  BORDER_GRAB_AREA      = *PRESIZEONBORDER ? *PBORDERSIZE + *PBORDERGRABEXTEND : 0;
+    // per window: borderGrabExtend widens it for PiPs and touch
+    const auto  BORDER_GRAB_AREA      = [&](const PHLWINDOW& w) -> int { return *PRESIZEONBORDER ? sc<int>(*PBORDERSIZE) + borderGrabExtend(w) : 0; };
     const bool  ONLY_PRIORITY         = properties & FOCUS_PRIORITY;
     const bool  DO_FOLLOW_MOUSE_CHECK = properties & FOLLOW_MOUSE_CHECK;
     const auto  HITBOX_SHRINK         = DO_FOLLOW_MOUSE_CHECK ? *PFOLLOWMOUSESHRINK : 0;
@@ -58,7 +60,7 @@ PHLWINDOW CViewHitTester::windowAt(const Vector2D& pos, uint16_t properties, PHL
             if (w->m_isFloating && w->m_isMapped && w->acceptsInput() && !w->m_X11ShouldntFocus && w->m_pinned && !w->m_ruleApplicator->noFocus().valueOrDefault() &&
                 w != ignoreWindow && !isShadowedByModal(w)) {
                 const auto BB  = w->getWindowBoxUnified(properties);
-                CBox       box = BB.copy().expand(!w->isX11OverrideRedirect() ? BORDER_GRAB_AREA : 0);
+                CBox       box = BB.copy().expand(!w->isX11OverrideRedirect() ? BORDER_GRAB_AREA(w) : 0);
                 if (HITBOX_SHRINK > 0 && w != LASTFOCUSED)
                     box = box.copy().expand(-HITBOX_SHRINK);
                 if (box.containsPoint(pos))
@@ -101,7 +103,7 @@ PHLWINDOW CViewHitTester::windowAt(const Vector2D& pos, uint16_t properties, PHL
                         continue;
 
                     const auto BB  = w->getWindowBoxUnified(properties);
-                    CBox       box = BB.copy().expand(!w->isX11OverrideRedirect() ? BORDER_GRAB_AREA : 0);
+                    CBox       box = BB.copy().expand(!w->isX11OverrideRedirect() ? BORDER_GRAB_AREA(w) : 0);
                     if (HITBOX_SHRINK > 0 && w != LASTFOCUSED)
                         box = box.copy().expand(-HITBOX_SHRINK);
                     if (box.containsPoint(pos)) {
@@ -185,7 +187,8 @@ PHLWINDOW CViewHitTester::windowAt(const Vector2D& pos, uint16_t properties, PHL
             if (!w->m_isFloating && w->m_isMapped && w->workspaceID() == WSPID && w->acceptsInput() && !w->m_X11ShouldntFocus && !w->m_ruleApplicator->noFocus().valueOrDefault() &&
                 w != ignoreWindow && !isShadowedByModal(w)) {
                 CBox box = (properties & USE_PROP_TILED) ? w->getWindowBoxUnified(properties) : w->layoutBox();
-                if ((properties & INPUT_EXTENTS) && BORDER_GRAB_AREA > 0 && !w->isX11OverrideRedirect()) {
+                const int WGRAB = BORDER_GRAB_AREA(w);
+                if ((properties & INPUT_EXTENTS) && WGRAB > 0 && !w->isX11OverrideRedirect()) {
                     const auto WORKAREA                    = PWORKSPACE->m_space->workArea();
                     auto       isWindowCloseToWorkAreaEdge = [&](const Math::eDirection dir) -> bool {
                         constexpr double STICK_THRESHOLD = 2.0; // This constant is taken from isAdjacent in CWindowQuery::inDirection
@@ -216,20 +219,20 @@ PHLWINDOW CViewHitTester::windowAt(const Vector2D& pos, uint16_t properties, PHL
                     };
 
                     if (isWindowCloseToWorkAreaEdge(Math::eDirection::DIRECTION_LEFT)) {
-                        box.x -= BORDER_GRAB_AREA;
-                        box.width += BORDER_GRAB_AREA;
+                        box.x -= WGRAB;
+                        box.width += WGRAB;
                     }
 
                     if (isWindowCloseToWorkAreaEdge(Math::eDirection::DIRECTION_RIGHT))
-                        box.width += BORDER_GRAB_AREA;
+                        box.width += WGRAB;
 
                     if (isWindowCloseToWorkAreaEdge(Math::eDirection::DIRECTION_UP)) {
-                        box.y -= BORDER_GRAB_AREA;
-                        box.height += BORDER_GRAB_AREA;
+                        box.y -= WGRAB;
+                        box.height += WGRAB;
                     }
 
                     if (isWindowCloseToWorkAreaEdge(Math::eDirection::DIRECTION_DOWN))
-                        box.height += BORDER_GRAB_AREA;
+                        box.height += WGRAB;
                 }
                 if (HITBOX_SHRINK > 0 && w != LASTFOCUSED)
                     box = box.copy().expand(-HITBOX_SHRINK);
@@ -348,6 +351,18 @@ static Vector2D ksHitInverse(const PHLWINDOW& window, Vector2D rel, bool missSen
 // window box, which is exactly what Hyprland's border-resize test (InputManager) wants.
 // Without it the grab zone stayed around the flat box, which is not where the card's
 // visible (inset) edges are, so a PiP could not be resized by its edges.
+int CViewHitTester::borderGrabExtend(PHLWINDOW window) const {
+    static auto      PEXTEND  = CConfigValue<Config::INTEGER>("general:extend_border_grab_area");
+    static auto      PTOUCH   = CConfigValue<Config::INTEGER>("general:touch_border_grab_area");
+    static auto      PPIPGRAB = CConfigValue<Config::INTEGER>("decoration:keystone_pip_grab");
+    Config::INTEGER  area     = *PEXTEND;
+    if (g_pInputManager && g_pInputManager->m_lastInputTouch)
+        area = std::max(area, sc<Config::INTEGER>(*PTOUCH));
+    if (window && window->m_ruleApplicator && window->m_ruleApplicator->m_tagKeeper.isTagged("pip", false))
+        area = std::max(area, sc<Config::INTEGER>(*PPIPGRAB));
+    return sc<int>(area);
+}
+
 Vector2D CViewHitTester::keystoneUnwarpGlobal(const Vector2D& pos, PHLWINDOW window) const {
     if (!window || !window->m_ruleApplicator || !window->m_ruleApplicator->m_tagKeeper.isTagged("dock", false))
         return pos;
