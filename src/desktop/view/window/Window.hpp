@@ -243,6 +243,28 @@ namespace Desktop::View {
         bool                       isNotResponding();
         bool                       priorityFocus();
         SP<CWLSurfaceResource>     getSolitaryResource() const;
+
+        // Scale-to-fit (window tag `fit`, and every side-dock card -- tag `dock`): a
+        // client that does not follow its configured size (Waydroid's fixed Android
+        // display) is drawn scaled into the window box, aspect kept and centred,
+        // instead of cropped or centred at 1:1. Input is mapped back through the same
+        // transform. Inactive (scale 1) while the client's size already matches.
+        struct SFitTransform {
+            bool     active = false;
+            double   scale  = 1.0;
+            Vector2D offset; // of the scaled content inside the window box, logical px
+            // the part of the main surface that is the window (its xdg geometry size,
+            // from the surface origin), when the surface is larger; zero otherwise
+            Vector2D crop;
+        };
+        SFitTransform fitTransform() const;
+        // side-dock back card: P of its `dockscale<P>` tag (its size in % of the front
+        // card), or 0 if it has none
+        int dockScalePercent() const;
+        // The size the client is told it has, for a box of `boxSize` (logical px): the
+        // box itself, except for side-dock and PiP cards (see the definition). The
+        // backend's logicalToClient (XWayland scaling) applies after.
+        Vector2D keystoneReportSize(const Vector2D& boxSize) const;
         std::optional<Vector2D>    calculateExpression(const Math::SExpressionVec2& expr);
         std::optional<Vector2D>    minSize();
         std::optional<Vector2D>    maxSize();

@@ -467,7 +467,10 @@ void CWindowTarget::sendWindowSize(bool force) {
     LOG(Log::TRACE, "sendWindowSize: window:{:x},title:{} with real pos {}, real size {} (force: {})", rc<uintptr_t>(m_window.get()), m_window->metadata().title(),
         m_window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL), m_window->size(Desktop::View::IGeometric::GEOMETRIC_GOAL), force);
 
-    m_window->backend().configure(CBox{m_window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL), m_window->size(Desktop::View::IGeometric::GEOMETRIC_GOAL)}, PMONITOR, force);
+    // keystone: side-dock and PiP cards are told a size other than their box (CWindow::keystoneReportSize)
+    m_window->backend().configure(
+        CBox{m_window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL), m_window->keystoneReportSize(m_window->size(Desktop::View::IGeometric::GEOMETRIC_GOAL))}, PMONITOR,
+        force);
 }
 
 void CWindowTarget::damageEntire() {
