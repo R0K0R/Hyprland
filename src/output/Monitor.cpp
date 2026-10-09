@@ -1574,7 +1574,11 @@ void CMonitor::setSpecialWorkspace(const PHLWORKSPACE& pWorkspace, bool noFocus)
             w->presentation().setAnimationsToMove();
 
             const auto MIDDLE = w->middle();
-            if (w->isFloating() && VECNOTINRECT(MIDDLE, m_position.x, m_position.y, m_position.x + m_size.x, m_position.y + m_size.y) && !w->backend().traits().overrideRedirect) {
+            // Side dock: cards park just past the screen edge and slide in when the dock's
+            // special workspace opens; recentring them here made every slide-in start from
+            // the middle of the screen. features/sidedock places them itself.
+            const bool DOCKCARD = w->m_ruleApplicator && w->m_ruleApplicator->m_tagKeeper.isTagged("dock", false);
+            if (w->isFloating() && !DOCKCARD && VECNOTINRECT(MIDDLE, m_position.x, m_position.y, m_position.x + m_size.x, m_position.y + m_size.y) && !w->backend().traits().overrideRedirect) {
                 // if it's floating and the middle isn't on the current mon, move it to the center
                 const auto PMONFROMMIDDLE = State::monitorState()->query().vec(MIDDLE).run();
                 Vector2D   pos            = w->position(Desktop::View::IGeometric::GEOMETRIC_GOAL);
