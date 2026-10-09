@@ -444,6 +444,24 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
                     const auto LS      = Desktop::View::CLayerSurface::fromView(HLSurface->view());
                     surfacePos         = BOX->pos();
 
+                    // Dock keystone / scale-to-fit: with a button held (a text-selection drag) the
+                    // point went to the held surface by its FLAT offset, so a drag in kitty on a
+                    // tilted card selected text away from the pointer while a plain click landed
+                    // right. Map it the way the hit test does: through the inverse warp (without
+                    // the miss sentinel -- a drag may leave the card), then the window's scale.
+                    if (PWINDOW && PWINDOW->m_ruleApplicator) {
+                        const auto FIT  = PWINDOW->fitTransform();
+                        const bool DOCK = PWINDOW->m_ruleApplicator->m_tagKeeper.isTagged("dock", false);
+                        if (DOCK || FIT.active) {
+                            const auto WPOS = PWINDOW->position(Desktop::View::IGeometric::GEOMETRIC_GOAL);
+                            Vector2D   rel  = Desktop::viewState()->hitTest().keystoneUnwarpGlobal(mouseCoords, PWINDOW) - WPOS;
+                            if (FIT.active)
+                                rel = (rel - FIT.offset) / FIT.scale;
+                            surfaceCoords = rel - (BOX->pos() - WPOS);
+                            surfacePos    = Vector2D(-1337, -1337);
+                        }
+                    }
+
                     if (PWINDOW && PWINDOW->acceptsInput())
                         pFoundWindow = PWINDOW;
                     else if (LS)
@@ -534,8 +552,14 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
                 foundSurface = Desktop::viewState()->hitTest().windowSurfaceAt(mouseCoords, pFoundWindow, surfaceCoords);
                 surfacePos   = Vector2D(-1337, -1337);
             } else {
-                foundSurface = pFoundWindow->wlSurface()->resource();
-                surfacePos   = pFoundWindow->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+                // Dock keystone: X11 dock windows render as a trapezoid too, so map the hit through
+                // the SAME inverse homography the Wayland path applies (windowSurfaceAt). A sentinel
+                // (x < -1e5) means the hit landed in the vacated strip beside the trapezoid -- a real
+                // MISS: leave foundSurface null so it falls through, instead of registering the flat
+                // coord. Non-dock X11 windows get the unchanged flat coord (never a sentinel).
+                surfaceCoords = Desktop::viewState()->hitTest().keystoneSurfaceLocal(mouseCoords, pFoundWindow);
+                foundSurface  = surfaceCoords.x < -1.0e5 ? nullptr : pFoundWindow->wlSurface()->resource();
+                surfacePos    = Vector2D(-1337, -1337);
             }
         }
     }
@@ -579,13 +603,24 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
         if (pFoundWindow) {
             if (!pFoundWindow->m_isX11) {
                 foundSurface = Desktop::viewState()->hitTest().windowSurfaceAt(mouseCoords, pFoundWindow, surfaceCoords);
-                if (!foundSurface) {
+                // Dock keystone: a null here is the vacated-strip sentinel -- the hit landed beside the
+                // trapezoid, a REAL miss. Skip the upstream main-surface fallback for dock windows (it
+                // re-grabbed the surface at the flat GEOMETRIC_CURRENT coord, so the card's empty left
+                // margin registered offset right+down); non-dock windows keep the fallback.
+                if (!foundSurface &&
+                    !(pFoundWindow->m_ruleApplicator && pFoundWindow->m_ruleApplicator->m_tagKeeper.isTagged("dock", false))) {
                     foundSurface = pFoundWindow->wlSurface()->resource();
                     surfacePos   = pFoundWindow->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
                 }
             } else {
-                foundSurface = pFoundWindow->wlSurface()->resource();
-                surfacePos   = pFoundWindow->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+                // Dock keystone: X11 dock windows render as a trapezoid too, so map the hit through
+                // the SAME inverse homography the Wayland path applies (windowSurfaceAt). A sentinel
+                // (x < -1e5) means the hit landed in the vacated strip beside the trapezoid -- a real
+                // MISS: leave foundSurface null so it falls through, instead of registering the flat
+                // coord. Non-dock X11 windows get the unchanged flat coord (never a sentinel).
+                surfaceCoords = Desktop::viewState()->hitTest().keystoneSurfaceLocal(mouseCoords, pFoundWindow);
+                foundSurface  = surfaceCoords.x < -1.0e5 ? nullptr : pFoundWindow->wlSurface()->resource();
+                surfacePos    = Vector2D(-1337, -1337);
             }
         }
     }
@@ -2168,7 +2203,8 @@ void CInputManager::setCursorIconOnBorder(PHLWINDOW w) {
 
     // give a small leeway (10 px) for corner icon
     const auto           CORNER           = ROUNDING + BORDERSIZE + 10;
-    const auto           mouseCoords      = getMouseCoordsInternal();
+    // dock keystone: border tests in the card's unwarped frame (keystoneUnwarpGlobal)
+    const auto           mouseCoords      = Desktop::viewState()->hitTest().keystoneUnwarpGlobal(getMouseCoordsInternal(), w);
     CBox                 box              = w->getWindowMainSurfaceBox();
     eBorderIconDirection direction        = BORDERICON_NONE;
     CBox                 boxFullGrabInput = {box.x - *PEXTENDBORDERGRAB - BORDERSIZE, box.y - *PEXTENDBORDERGRAB - BORDERSIZE, box.width + 2 * (*PEXTENDBORDERGRAB + BORDERSIZE),
