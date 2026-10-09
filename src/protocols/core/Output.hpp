@@ -25,6 +25,7 @@ class CWLOutputResource {
   private:
     SP<CWlOutput> m_resource;
     wl_client*    m_client = nullptr;
+    int32_t       m_sentScale = 0; // last wl_output.scale sent; 0 = none yet
 
     friend class CWLOutputProtocol;
 };
