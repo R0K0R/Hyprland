@@ -41,6 +41,18 @@ void CUnifiedWorkspaceSwipeGesture::update(double delta) {
     if (!isGestureInProgress())
         return;
 
+    // The monitor this swipe began on can disappear mid-gesture -- disabled by
+    // a monitor rule (a lid-close handler turning the panel off), unplugged --
+    // and m_monitor is only a weak reference, so everything below would
+    // dereference null. Abandon the swipe the way update() already does for an
+    // invalid one, putting the starting workspace back where it was.
+    if UNLIKELY (!m_monitor) {
+        m_workspaceBegin->m_renderOffset->setValueAndWarp(Vector2D(0, 0));
+        m_workspaceBegin   = nullptr;
+        m_initialDirection = 0;
+        return;
+    }
+
     static auto  PSWIPEDIST             = CConfigValue<Config::INTEGER>("gestures:workspace_swipe_distance");
     static auto  PSWIPENEW              = CConfigValue<Config::INTEGER>("gestures:workspace_swipe_create_new");
     static auto  PSWIPEDIRLOCK          = CConfigValue<Config::INTEGER>("gestures:workspace_swipe_direction_lock");
@@ -185,6 +197,18 @@ void CUnifiedWorkspaceSwipeGesture::update(double delta) {
 void CUnifiedWorkspaceSwipeGesture::end() {
     if (!isGestureInProgress())
         return;
+
+    // The monitor this swipe began on can disappear mid-gesture -- disabled by
+    // a monitor rule (a lid-close handler turning the panel off), unplugged --
+    // and m_monitor is only a weak reference, so everything below would
+    // dereference null. Abandon the swipe the way update() already does for an
+    // invalid one, putting the starting workspace back where it was.
+    if UNLIKELY (!m_monitor) {
+        m_workspaceBegin->m_renderOffset->setValueAndWarp(Vector2D(0, 0));
+        m_workspaceBegin   = nullptr;
+        m_initialDirection = 0;
+        return;
+    }
 
     static auto PSWIPEPERC    = CConfigValue<Config::FLOAT>("gestures:workspace_swipe_cancel_ratio");
     static auto PSWIPEDIST    = CConfigValue<Config::INTEGER>("gestures:workspace_swipe_distance");
