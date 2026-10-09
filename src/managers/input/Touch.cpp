@@ -108,6 +108,14 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
         }
     }
 
+    // resize_on_border for touch: a finger landing on a window's border grab zone (wider
+    // than the mouse's, general:touch_border_grab_area) resizes it like a mouse drag there.
+    // One finger at a time; it never reaches the client, and other fingers are unaffected.
+    if (!m_touchBorderResizeID && beginBorderResizeAt(TOUCH_COORDS)) {
+        m_touchBorderResizeID = e.touchID;
+        return;
+    }
+
     // could have abovelock surface, thus only use lock if no ls found
     if (g_pSessionLockManager->isSessionLocked() && m_foundLSToFocus.expired()) {
         m_touchData.touchFocusLockSurface = g_pSessionLockManager->getSessionLockSurfaceForMonitor(PMONITOR->m_id);
@@ -172,6 +180,13 @@ void CInputManager::onTouchUp(ITouch::SUpEvent e, SP<ITouch> device) {
 
     Event::SCallbackInfo info;
     Event::bus()->m_events.input.touch.up.emit(e, info);
+    // resize_on_border by touch: this finger was driving a border resize
+    if (m_touchBorderResizeID && *m_touchBorderResizeID == e.touchID) {
+        m_touchBorderResizeID.reset();
+        endBorderResize();
+        return;
+    }
+
     const auto CONSUMED = std::erase_if(m_touchData.consumedTouches, [&e, &device](const auto& touch) { return touch.device == device && touch.id == e.touchID; });
     if (CONSUMED) {
         if (m_touchData.workspaceSwipe && m_touchData.workspaceSwipe->device == device && m_touchData.workspaceSwipe->id == e.touchID) {
@@ -226,6 +241,11 @@ void CInputManager::onTouchMove(ITouch::SMotionEvent e, SP<ITouch> device) {
     Event::bus()->m_events.input.touch.motion.emit(e, info);
     if (info.cancelled)
         return;
+
+    if (m_touchBorderResizeID && *m_touchBorderResizeID == e.touchID) {
+        borderResizeMoveTo(m_touchData.lastTouchPos);
+        return;
+    }
 
     if (std::ranges::any_of(m_touchData.consumedTouches, [&e, &device](const auto& touch) { return touch.device == device && touch.id == e.touchID; })) {
         if (!m_touchData.workspaceSwipe || m_touchData.workspaceSwipe->device != device || m_touchData.workspaceSwipe->id != e.touchID ||
