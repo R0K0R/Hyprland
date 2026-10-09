@@ -14,6 +14,14 @@
 #include "../../devices/Tablet.hpp"
 #include "../../managers/input/InputManager.hpp"
 #include "../../managers/eventLoop/EventLoopManager.hpp"
+#include "../../desktop/state/ViewState.hpp"
+#include "../../desktop/state/ViewStateTracker.hpp"
+#include "../../desktop/state/ViewHitTester.hpp"
+#include "../../desktop/view/Window.hpp"
+#include "../../desktop/view/WLSurface.hpp"
+#include "../../desktop/view/LayerSurface.hpp"
+#include "../../managers/SeatManager.hpp"
+#include <unordered_map>
 #include <expected>
 #include <vector>
 
@@ -105,7 +113,7 @@ CLuaEventHandler::CLuaEventHandler(lua_State* L) : m_lua(L) {
     m_listeners.push_back(bus()->m_events.window.active.listen([this](PHLWINDOW w, Desktop::eFocusReason r) {
         dispatch("window.active", 2, [&](lua_State* L) {
             CLuaWindow::push(L, w);
-            lua_pushinteger(L, sc<lua_Integer>(r));
+            lua_pushinteger(L, static_cast<lua_Integer>(r));
         });
     }));
     m_listeners.push_back(bus()->m_events.window.urgent.listen([this](PHLWINDOW w) { dispatch("window.urgent", 1, [&](lua_State* L) { CLuaWindow::push(L, w); }); }));
@@ -156,14 +164,14 @@ CLuaEventHandler::CLuaEventHandler(lua_State* L) : m_lua(L) {
 
     m_listeners.push_back(bus()->m_events.config.reloaded.listen([this] { dispatch("config.reloaded", 0, [](lua_State* L) {}); }));
     m_listeners.push_back(bus()->m_events.config.props_refreshed.listen(
-        [this](const bool execdAsScheduled) { dispatch("config.props_refreshed", 1, [&](lua_State* L) { lua_pushboolean(L, sc<lua_Integer>(execdAsScheduled)); }); }));
+        [this](const bool execdAsScheduled) { dispatch("config.props_refreshed", 1, [&](lua_State* L) { lua_pushboolean(L, static_cast<lua_Integer>(execdAsScheduled)); }); }));
 
     m_listeners.push_back(
         bus()->m_events.keybinds.submap.listen([this](const std::string& submap) { dispatch("keybinds.submap", 1, [&](lua_State* L) { lua_pushstring(L, submap.c_str()); }); }));
     m_listeners.push_back(bus()->m_events.screenshare.state.listen([this](bool state, uint8_t type, const std::string& name) {
         dispatch("screenshare.state", 3, [&](lua_State* L) {
             lua_pushboolean(L, state);
-            lua_pushinteger(L, sc<lua_Integer>(type));
+            lua_pushinteger(L, static_cast<lua_Integer>(type));
             lua_pushstring(L, name.c_str());
         });
     }));
@@ -200,17 +208,95 @@ CLuaEventHandler::CLuaEventHandler(lua_State* L) : m_lua(L) {
         lua_pushnumber(L, p.y);
         lua_setfield(L, -2, "y");
     };
-    m_listeners.push_back(bus()->m_events.input.touch.down.listen([this, pushPoint](const ITouch::SDownEvent& e, const SCallbackInfo& _) {
+    /*
+      The touch stream (keystone/11): one table per event, so Lua can recognize any gesture.
+        input.touch.down   {id, x, y, time, count, claimed, window = <window under it | nil>,
+                            layer = <namespace of the layer surface that takes it | nil>}
+        input.touch.move   {id, x, y, time, count, claimed, resizing}
+        input.touch.up     {id, x, y, time, count, claimed}      -- x, y: its last position
+        input.touch.cancel {id, x, y, time, count, claimed}      -- the device cancelled it
+      A touch that lands on a layer surface (the on-screen keyboard, the bar, a popout)
+      carries its namespace as `layer` and no window: the window is only drawn beneath,
+      the surface takes the touch (CInputManager::inputLayerAt -- the order onTouchDown's
+      refocus uses). A tap on the keyboard's 'o' over a back dock card's edge raised the
+      card when this said only `window` (2026-10-08).
+      Global layout coordinates (hl.get_cursor_pos()'s space). count = fingers down
+      including this one on down, excluding it on up. A claimed sequence reaches Lua
+      only (see managers/input/Touch.cpp).
+    */
+    const auto pushTouch = [](lua_State* L, int32_t id, const Vector2D& p, uint32_t timeMs) {
+        lua_createtable(L, 0, 8);
+        lua_pushinteger(L, id);
+        lua_setfield(L, -2, "id");
+        lua_pushnumber(L, p.x);
+        lua_setfield(L, -2, "x");
+        lua_pushnumber(L, p.y);
+        lua_setfield(L, -2, "y");
+        lua_pushinteger(L, timeMs);
+        lua_setfield(L, -2, "time");
+        lua_pushinteger(L, static_cast<lua_Integer>(g_pInputManager->m_touchSeq.down.size()));
+        lua_setfield(L, -2, "count");
+        lua_pushboolean(L, g_pInputManager->m_touchSeq.claimed);
+        lua_setfield(L, -2, "claimed");
+    };
+    // the last position of each finger, for up/cancel (which carry none)
+    static std::unordered_map<int32_t, Vector2D> s_touchPos;
+
+    m_listeners.push_back(bus()->m_events.input.touch.down.listen([this, pushTouch](const ITouch::SDownEvent& e, const SCallbackInfo& _) {
         // same monitor choice as CInputManager::onTouchDown
         auto PMONITOR = State::monitorState()->query().name(e.device && !e.device->m_boundOutput.empty() ? e.device->m_boundOutput : "").run();
         PMONITOR      = PMONITOR ? PMONITOR : Desktop::focusState()->monitor();
         if (!PMONITOR)
             return;
         const Vector2D POS = PMONITOR->m_position + e.pos * PMONITOR->m_size;
-        dispatch("input.touch.down", 2, [&](lua_State* L) {
-            pushPoint(L, POS);
-            lua_pushinteger(L, e.touchID);
+        s_touchPos[e.touchID] = POS;
+        const auto LAYER      = g_pInputManager->inputLayerAt(POS);
+        const auto WINDOW     = LAYER ? nullptr :
+                                        Desktop::viewState()->hitTest().windowAt(POS, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
+        dispatch("input.touch.down", 1, [&](lua_State* L) {
+            pushTouch(L, e.touchID, POS, e.timeMs);
+            if (WINDOW)
+                CLuaWindow::push(L, WINDOW);
+            else
+                lua_pushnil(L);
+            lua_setfield(L, -2, "window");
+            if (LAYER) {
+                lua_pushstring(L, LAYER->m_namespace.c_str());
+                lua_setfield(L, -2, "layer");
+            }
         });
+    }));
+    m_listeners.push_back(bus()->m_events.input.touch.motion.listen([this, pushTouch](const ITouch::SMotionEvent& e, const SCallbackInfo& _) {
+        // same mapping as CInputManager::onTouchMove (the focused monitor)
+        const auto PMONITOR = Desktop::focusState()->monitor();
+        if (!PMONITOR)
+            return;
+        const Vector2D POS    = PMONITOR->m_position + e.pos * PMONITOR->m_size;
+        s_touchPos[e.touchID] = POS;
+        dispatch("input.touch.move", 1, [&](lua_State* L) {
+            pushTouch(L, e.touchID, POS, e.timeMs);
+            lua_pushboolean(L, g_pInputManager->m_touchBorderResizeID && *g_pInputManager->m_touchBorderResizeID == e.touchID);
+            lua_setfield(L, -2, "resizing");
+        });
+    }));
+    m_listeners.push_back(bus()->m_events.input.touch.up.listen([this, pushTouch](const ITouch::SUpEvent& e, const SCallbackInfo& _) {
+        const auto IT  = s_touchPos.find(e.touchID);
+        const auto POS = IT != s_touchPos.end() ? IT->second : Vector2D{};
+        if (IT != s_touchPos.end())
+            s_touchPos.erase(IT);
+        dispatch("input.touch.up", 1, [&](lua_State* L) {
+            pushTouch(L, e.touchID, POS, e.timeMs);
+            // count excludes the finger lifting (Touch.cpp erases it after this emit)
+            lua_pushinteger(L, static_cast<lua_Integer>(g_pInputManager->m_touchSeq.down.size() - (g_pInputManager->m_touchSeq.down.contains(e.touchID) ? 1 : 0)));
+            lua_setfield(L, -2, "count");
+        });
+    }));
+    m_listeners.push_back(bus()->m_events.input.touch.cancel.listen([this, pushTouch](const ITouch::SCancelEvent& e, const SCallbackInfo& _) {
+        const auto IT  = s_touchPos.find(e.touchID);
+        const auto POS = IT != s_touchPos.end() ? IT->second : Vector2D{};
+        if (IT != s_touchPos.end())
+            s_touchPos.erase(IT);
+        dispatch("input.touch.cancel", 1, [&](lua_State* L) { pushTouch(L, e.touchID, POS, e.timeMs); });
     }));
     m_listeners.push_back(bus()->m_events.input.tablet.tip.listen([this, pushPoint](const CTablet::STipEvent& e, const SCallbackInfo& _) {
         if (!e.in)
@@ -219,7 +305,21 @@ CLuaEventHandler::CLuaEventHandler(lua_State* L) : m_lua(L) {
         // The lock dies with this handler (config reload), cancelling a pending call.
         m_tabletTipLater = g_pEventLoopManager->doLaterLock([this, pushPoint] {
             const Vector2D POS = g_pInputManager->getMouseCoordsInternal();
-            dispatch("input.tablet.tip", 1, [&](lua_State* L) { pushPoint(L, POS); });
+            // `layer`: the pen's target after the warp is the pointer focus; when that is a
+            // layer surface (the on-screen keyboard, the bar), the press is the shell's, not
+            // the window's beneath (same reason as touch.down's `layer`)
+            std::string LAYERNS;
+            if (const auto HLS = Desktop::View::CWLSurface::fromResource(g_pSeatManager->m_state.pointerFocus.lock()); HLS) {
+                if (const auto LS = Desktop::View::CLayerSurface::fromView(HLS->view()); LS)
+                    LAYERNS = LS->m_namespace.empty() ? std::string{"?"} : LS->m_namespace;
+            }
+            dispatch("input.tablet.tip", 1, [&](lua_State* L) {
+                pushPoint(L, POS);
+                if (!LAYERNS.empty()) {
+                    lua_pushstring(L, LAYERNS.c_str());
+                    lua_setfield(L, -2, "layer");
+                }
+            });
         });
     }));
 }
@@ -336,6 +436,9 @@ std::unordered_set<std::string> CLuaEventHandler::knownEvents() {
         "hyprland.shutdown",
         "input.keyboard.key",
         "input.touch.down",
+        "input.touch.move",
+        "input.touch.up",
+        "input.touch.cancel",
         "input.tablet.tip",
     };
     for (auto& kv : Event::bus()->m_events.plugin)

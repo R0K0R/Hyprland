@@ -1004,6 +1004,28 @@ bool CInputManager::isOnResizeBorder(PHLWINDOW w, const Vector2D& coords) {
     return grab.containsPoint(MC) && (!real.containsPoint(MC) || w->isInCurvedCorner(MC.x, MC.y)) && !w->hasPopupAt(coords);
 }
 
+PHLLS CInputManager::inputLayerAt(const Vector2D& pos) {
+    const auto PMONITOR = State::monitorState()->query().vec(pos).run();
+    Vector2D   local;
+    PHLLS      found;
+
+    if (!m_exclusiveLSes.empty()) {
+        if (Desktop::viewState()->hitTest().layerPopupSurfaceAt(pos, &m_exclusiveLSes, &local, &found) && found)
+            return found;
+        if (Desktop::viewState()->hitTest().layerSurfaceAt(pos, &m_exclusiveLSes, &local, &found) && found)
+            return found;
+    }
+    if (!PMONITOR)
+        return nullptr;
+    if (Desktop::viewState()->hitTest().layerPopupSurfaceAt(pos, PMONITOR, &local, &found) && found)
+        return found;
+    if (Desktop::viewState()->hitTest().layerSurfaceAt(pos, &PMONITOR->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY], &local, &found) && found)
+        return found;
+    if (Desktop::viewState()->hitTest().layerSurfaceAt(pos, &PMONITOR->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_TOP], &local, &found) && found)
+        return found;
+    return nullptr;
+}
+
 bool CInputManager::beginBorderResizeAt(const Vector2D& coords) {
     // callers have just refocus()ed at coords, so a layer surface there (a bar, a panel)
     // shows up here and takes the press instead
