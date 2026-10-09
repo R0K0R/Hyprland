@@ -76,8 +76,17 @@ void CWLOutputResource::updateState() {
     if (!m_monitor || (m_owner && m_owner->m_defunct))
         return;
 
-    if (m_resource->version() >= 2)
-        m_resource->sendScale(std::ceil(m_monitor->m_scale));
+    // Only when it changed: the scale event is due at bind and on a change, and
+    // re-sending an unchanged one on every mode change (a rotation, say) is not
+    // harmless. Waydroid's hwcomposer folds every wl_output.scale it receives into
+    // its one display scale as max((int)scale, event) -- turning a fractional 1.5
+    // from wp_fractional_scale into ceil(1.5) = 2 for the rest of the session, so
+    // every Android layer was drawn at 0.75 of the window, black around it.
+    const int32_t SCALE = std::ceil(m_monitor->m_scale);
+    if (m_resource->version() >= 2 && SCALE != m_sentScale) {
+        m_resource->sendScale(SCALE);
+        m_sentScale = SCALE;
+    }
 
     m_resource->sendMode(WL_OUTPUT_MODE_CURRENT, m_monitor->m_pixelSize.x, m_monitor->m_pixelSize.y, m_monitor->m_refreshRate * 1000.0);
 
