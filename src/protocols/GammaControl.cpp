@@ -10,6 +10,14 @@ CGammaControl::CGammaControl(SP<CZwlrGammaControlV1> resource_, wl_resource* out
     if UNLIKELY (!resource_->resource())
         return;
 
+    // Cleanup first. onGetGammaControl keeps every controller it constructs,
+    // including ones refused below, so a refused controller must still leave
+    // m_gammaControllers when its client destroys it -- previously these
+    // handlers were only registered on success and a refused one stayed
+    // forever.
+    m_resource->setDestroy([this](CZwlrGammaControlV1* gamma) { PROTO::gamma->destroyGammaControl(this); });
+    m_resource->setOnDestroy([this](CZwlrGammaControlV1* gamma) { PROTO::gamma->destroyGammaControl(this); });
+
     auto OUTPUTRES = CWLOutputResource::fromResource(output);
 
     if UNLIKELY (!OUTPUTRES) {
@@ -18,33 +26,38 @@ CGammaControl::CGammaControl(SP<CZwlrGammaControlV1> resource_, wl_resource* out
         return;
     }
 
-    m_monitor = OUTPUTRES->m_monitor;
+    // Held in a local until every check passes. m_monitor is what both the
+    // duplicate check below and applyGammaToState() match on, so assigning it
+    // before refusing let a refused controller claim the monitor: every later
+    // request for that output failed as a "duplicate", and applyGammaToState
+    // picked the refused controller (no table) first, reset the LUT and broke
+    // out -- gamma was dead for that output until the compositor restarted.
+    auto monitor = OUTPUTRES->m_monitor;
 
-    if UNLIKELY (!m_monitor || !m_monitor->m_output) {
+    if UNLIKELY (!monitor || !monitor->m_output) {
         LOGM(Log::ERR, "No CMonitor");
         m_resource->sendFailed();
         return;
     }
 
     for (auto const& g : PROTO::gamma->m_gammaControllers) {
-        if UNLIKELY (g->m_monitor == m_monitor) {
+        if UNLIKELY (g->m_monitor == monitor) {
             m_resource->sendFailed();
             return;
         }
     }
 
-    m_gammaSize = m_monitor->m_output->getGammaSize();
+    m_gammaSize = monitor->m_output->getGammaSize();
 
     if UNLIKELY (m_gammaSize <= 0) {
-        LOGM(Log::ERR, "Output {} doesn't support gamma", m_monitor->m_name);
+        LOGM(Log::ERR, "Output {} doesn't support gamma", monitor->m_name);
         m_resource->sendFailed();
         return;
     }
 
-    m_gammaTable.resize(m_gammaSize * 3);
+    m_monitor = monitor;
 
-    m_resource->setDestroy([this](CZwlrGammaControlV1* gamma) { PROTO::gamma->destroyGammaControl(this); });
-    m_resource->setOnDestroy([this](CZwlrGammaControlV1* gamma) { PROTO::gamma->destroyGammaControl(this); });
+    m_gammaTable.resize(m_gammaSize * 3);
 
     m_resource->setSetGamma([this](CZwlrGammaControlV1* gamma, int32_t fd) {
         CFileDescriptor gammaFd{fd};
