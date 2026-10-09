@@ -1,4 +1,5 @@
 #include "LuaFunctionGesture.hpp"
+#include "WorkspaceSwipeGesture.hpp"
 
 #include "../../../../config/lua/ConfigManager.hpp"
 #include "../../../../config/lua/LuaCaller.hpp"
@@ -126,6 +127,18 @@ CLuaFunctionGesture::CLuaFunctionGesture(Config::Lua::CLuaRef&& fn) : m_luaEndFn
     ;
 }
 
+std::string CLuaFunctionGesture::s_requestedHandoff;
+
+// a direction-sensitive built-in (the workspace swipe) expects the registered AXIS, while
+// this gesture is handed the actual direction
+static eTrackpadGestureDirection axisOf(eTrackpadGestureDirection d) {
+    if (d == TRACKPAD_GESTURE_DIR_UP || d == TRACKPAD_GESTURE_DIR_DOWN)
+        return TRACKPAD_GESTURE_DIR_VERTICAL;
+    if (d == TRACKPAD_GESTURE_DIR_LEFT || d == TRACKPAD_GESTURE_DIR_RIGHT)
+        return TRACKPAD_GESTURE_DIR_HORIZONTAL;
+    return d;
+}
+
 CLuaFunctionGesture::CLuaFunctionGesture(Config::Lua::CLuaRef&& start, Config::Lua::CLuaRef&& update, Config::Lua::CLuaRef&& end) :
     m_luaStartFn(std::move(start)), m_luaUpdateFn(std::move(update)), m_luaEndFn(std::move(end)) {
     ;
@@ -138,10 +151,30 @@ void CLuaFunctionGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e
     if (!MGR || !m_luaStartFn.state())
         return;
 
+    m_delegating = false;
+    m_handoff.reset();
+    s_requestedHandoff.clear();
+
     MGR->caller().call(m_luaStartFn, Config::Lua::CLuaCaller::LUA_TIMEOUT_EVENT_CALLBACK_MS, "hl.gesture start callback", [&](lua_State* L) { return pushGestureEvent(L, e); });
+
+    if (s_requestedHandoff == "workspace") {
+        m_handoff    = std::make_unique<CWorkspaceSwipeGesture>();
+        auto ev      = e;
+        ev.direction = axisOf(e.direction);
+        m_handoff->begin(ev);
+        m_delegating = true;
+    }
+    s_requestedHandoff.clear();
 }
 
 void CLuaFunctionGesture::update(const ITrackpadGesture::STrackpadGestureUpdate& e) {
+    if (m_delegating && m_handoff) {
+        auto ev      = e;
+        ev.direction = axisOf(e.direction);
+        m_handoff->update(ev);
+        return;
+    }
+
     const auto MGR = Config::Lua::mgr();
     if (!MGR || !m_luaUpdateFn.state())
         return;
@@ -150,6 +183,15 @@ void CLuaFunctionGesture::update(const ITrackpadGesture::STrackpadGestureUpdate&
 }
 
 void CLuaFunctionGesture::end(const ITrackpadGesture::STrackpadGestureEnd& e) {
+    if (m_delegating && m_handoff) {
+        auto ev      = e;
+        ev.direction = axisOf(e.direction);
+        m_handoff->end(ev);
+        m_handoff.reset();
+        m_delegating = false;
+        return;
+    }
+
     const auto MGR = Config::Lua::mgr();
     if (!MGR || !m_luaEndFn.state())
         return;
