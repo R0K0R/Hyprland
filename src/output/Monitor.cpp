@@ -711,6 +711,14 @@ bool CMonitor::applyMonitorRuleSoft(Config::CMonitorRule&& pMonitorRule) {
 
     m_damage.setSize(m_transformedSize);
 
+    // The pre-blurred background cache (decoration:blur:new_optimizations)
+    // was rendered under the previous transform, and nothing on this path
+    // invalidates it -- after a transform-only rule apply (rotation), windows
+    // kept blurring an un-rotated wallpaper until some unrelated event
+    // happened to dirty it. Soft applies are rare, so re-blurring on every
+    // one costs nothing measurable.
+    m_blurFBDirty = true;
+
     setMirror(m_activeMonitorRule.m_mirrorOf);
 
     return true;
