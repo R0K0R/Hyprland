@@ -26,6 +26,11 @@ class CTrackpadGestures {
     eTrackpadGestureDirection        dirForString(const std::string_view& s);
     const char*                      stringForDir(eTrackpadGestureDirection dir);
 
+    // True while a swipe fed in from somewhere other than libinput's touchpad -- the
+    // touchscreen -- is running: its deltas are LOGICAL, not physical. The side-dock swipe
+    // (MoveGesture) reads it to keep its direction physical on a rotated screen.
+    bool                             m_fromTouchscreen = false;
+
   private:
     struct SGestureData {
         UP<ITrackpadGesture>      gesture;
