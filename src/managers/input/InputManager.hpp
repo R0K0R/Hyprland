@@ -2,6 +2,7 @@
 
 #include "../../defines.hpp"
 #include <list>
+#include <unordered_map>
 #include <any>
 #include "../../helpers/WLClasses.hpp"
 #include "../../helpers/time/Timer.hpp"
@@ -143,6 +144,27 @@ class CInputManager {
     void               onTouchDown(ITouch::SDownEvent);
     void               onTouchUp(ITouch::SUpEvent);
     void               onTouchMove(ITouch::SMotionEvent);
+
+    /*
+      Touch claiming (keystone/11). The compositor recognizes no touch gestures itself:
+      it streams every touch to Lua (input.touch.down/move/up/cancel) and lets the Lua
+      side take touches away from clients. A CLAIMED sequence is cancelled for its client
+      (wl_touch.cancel covers the whole sequence) and from then on its fingers -- the ones
+      down now and any that land before all lift -- reach Lua only. Claimed automatically
+      once gestures:touch_claim_fingers are down at once; on demand by hl.touch_claim.
+    */
+    struct STouchSequence {
+        std::unordered_map<int32_t, bool> down; // finger -> delivered to a client (sendTouchDown)
+        bool                              claimed   = false;
+        uint32_t                          lastDownMs = 0;
+    } m_touchSeq;
+    bool               claimTouchSequence(); // false if no finger is down
+    void               onTouchCancelAll();   // the device cancelled its touches
+    // The layer surface that takes input at `pos` ahead of any window, or null:
+    // exclusive layers, layer popups, then overlay and top -- mouseMoveUnified's own
+    // order before it looks at windows. For Lua: a press there belongs to the shell
+    // surface (the on-screen keyboard, the bar), not to the window drawn beneath it.
+    PHLLS              inputLayerAt(const Vector2D& pos);
 
     // resize_on_border for pen and touch, which never reach processMouseDownNormal's
     // border press: the same keystone-aware zone test, then the same MBIND_RESIZE drag,

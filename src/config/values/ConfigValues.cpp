@@ -416,6 +416,8 @@ std::vector<SP<IValue>> Values::getConfigValues() {
          */
 
         MS<Int>("gestures:workspace_swipe_distance", "in px, the distance of the touchpad gesture", 300, {.min = 0, .max = 2000}),
+        MS<Int>("gestures:touch_claim_fingers", "touchscreen: once this many fingers are down at once, the whole touch sequence is taken from the client and reported to Lua only (0 = never)", 3, {.min = 0, .max = 10}),
+        MS<Float>("gestures:touch_swipe_scale", "hl.touch_swipe: logical px of finger travel -> trackpad delta", 1.f, {.min = 0.1f, .max = 10.f}),
         MS<String>("gestures:dock_swipe_exec", "side dock: command run on release of a move gesture that began on a dock card, with next/prev/out/hide/none and the front card's address", STRVAL_EMPTY),
         MS<Float>("gestures:dock_swipe_follow", "side dock: on a swipe away from the dock edge, the fraction of the previous card's travel each deeper card follows (the lag)", 0.75f, {.min = 0.f, .max = 1.f}),
         MS<Float>("gestures:dock_swipe_pullout", "side dock: a swipe away from the dock edge further than this fraction of the monitor (along the dock axis) pulls the front card out of the dock", 0.35f, {.min = 0.05f, .max = 1.f}),

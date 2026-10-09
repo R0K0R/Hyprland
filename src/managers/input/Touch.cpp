@@ -14,6 +14,50 @@
 #include "debug/log/Logger.hpp"
 #include "UnifiedWorkspaceSwipeGesture.hpp"
 
+#include <algorithm>
+
+/*
+  Touch gestures live in Lua (features/hyprland/touch.lua), not here. This file only
+  tracks the current touch sequence (m_touchSeq) and honours CLAIMS: a claimed
+  sequence is cancelled for its client and its fingers go to Lua only (the
+  input.touch.* events, emitted from the event bus at the top of each handler, see
+  config/lua/LuaEventHandler.cpp). Claimed automatically once
+  gestures:touch_claim_fingers fingers are down at once, or by hl.touch_claim.
+
+  A finger that starts a border resize (keystone/10) keeps resizing: the resize branch
+  runs before the claim check on move and up, and that finger is not counted towards
+  the claim threshold. Lua still sees it (resizing = true on its move events).
+*/
+bool CInputManager::claimTouchSequence() {
+    if (m_touchSeq.down.empty())
+        return false;
+    if (m_touchSeq.claimed)
+        return true;
+    m_touchSeq.claimed = true;
+    // wl_touch.cancel is per sequence: every delivered finger is withdrawn at once. Their
+    // ups are still sent later -- the seat counts each delivered down (m_touchLocks).
+    if (std::ranges::any_of(m_touchSeq.down, [](const auto& kv) { return kv.second; }))
+        g_pSeatManager->sendTouchCancel();
+    return true;
+}
+
+void CInputManager::onTouchCancelAll() {
+    for (const auto& [id, _] : m_touchSeq.down) {
+        Event::SCallbackInfo info;
+        Event::bus()->m_events.input.touch.cancel.emit(ITouch::SCancelEvent{.timeMs = 0, .touchID = id}, info);
+    }
+    const bool DELIVERED   = std::ranges::any_of(m_touchSeq.down, [](const auto& kv) { return kv.second; });
+    const bool WASCLAIMED  = m_touchSeq.claimed; // its client was cancelled already
+    m_touchSeq.down.clear();
+    m_touchSeq.claimed = false;
+    if (m_touchBorderResizeID) {
+        m_touchBorderResizeID.reset();
+        endBorderResize();
+    }
+    if (DELIVERED && !WASCLAIMED)
+        g_pSeatManager->sendTouchCancel();
+}
+
 void CInputManager::onTouchDown(ITouch::SDownEvent e) {
     m_lastInputTouch = true;
 
@@ -24,6 +68,23 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
     auto                 gapsOut     = *PGAPSOUT;
     static auto          PBORDERSIZE = CConfigValue<Config::INTEGER>("general:border_size");
     static auto          PSWIPEINVR  = CConfigValue<Config::INTEGER>("gestures:workspace_swipe_touch_invert");
+    static auto          PCLAIM      = CConfigValue<Config::INTEGER>("gestures:touch_claim_fingers");
+
+    // the touch sequence (see the top of this file). A finger whose up never came must not
+    // wedge it: a sequence with no new finger for 10s is dropped.
+    if (!m_touchSeq.down.empty() && e.timeMs - m_touchSeq.lastDownMs > 10000) {
+        m_touchSeq.down.clear();
+        m_touchSeq.claimed = false;
+    }
+    if (m_touchSeq.down.empty())
+        m_touchSeq.claimed = false;
+    m_touchSeq.down[e.touchID] = false;
+    m_touchSeq.lastDownMs      = e.timeMs;
+    if (*PCLAIM > 0) {
+        const size_t COUNTED = m_touchSeq.down.size() - (m_touchBorderResizeID && m_touchSeq.down.contains(*m_touchBorderResizeID) ? 1 : 0);
+        if (COUNTED >= sc<size_t>(*PCLAIM))
+            claimTouchSequence();
+    }
 
     Event::SCallbackInfo info;
     Event::bus()->m_events.input.touch.down.emit(e, info);
@@ -42,6 +103,10 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
     m_touchData.lastTouchPos = TOUCH_COORDS;
 
     refocus(TOUCH_COORDS);
+
+    // claimed (by the threshold above or by Lua during the emit): Lua's alone
+    if (m_touchSeq.claimed)
+        return;
 
     if (m_clickBehavior == CLICKMODE_KILL) {
         IPointer::SButtonEvent e;
@@ -137,6 +202,7 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
     } else
         return; // oops, nothing found.
 
+    m_touchSeq.down[e.touchID] = true;
     g_pSeatManager->sendTouchDown(m_touchData.touchFocusSurface.lock(), e.timeMs, e.touchID, local);
 }
 
@@ -148,9 +214,25 @@ void CInputManager::onTouchUp(ITouch::SUpEvent e) {
     if (info.cancelled)
         return;
 
+    const auto SEQ       = m_touchSeq.down.find(e.touchID);
+    const bool KNOWN     = SEQ != m_touchSeq.down.end();
+    const bool DELIVERED = KNOWN && SEQ->second;
+    const bool CLAIMED   = m_touchSeq.claimed;
+    if (KNOWN)
+        m_touchSeq.down.erase(SEQ);
+    if (m_touchSeq.down.empty())
+        m_touchSeq.claimed = false;
+
     if (m_touchBorderResizeID && *m_touchBorderResizeID == e.touchID) {
         m_touchBorderResizeID.reset();
         endBorderResize();
+        return;
+    }
+
+    if (CLAIMED && KNOWN) {
+        // the client was cancelled, but a finger it saw go down still goes up (m_touchLocks)
+        if (DELIVERED && m_touchData.touchFocusSurface)
+            g_pSeatManager->sendTouchUp(e.timeMs, e.touchID);
         return;
     }
 
@@ -185,6 +267,10 @@ void CInputManager::onTouchMove(ITouch::SMotionEvent e) {
         borderResizeMoveTo(m_touchData.lastTouchPos);
         return;
     }
+
+    // a claimed finger moves for Lua only
+    if (m_touchSeq.claimed && m_touchSeq.down.contains(e.touchID))
+        return;
 
     if (g_pUnifiedWorkspaceSwipe->isGestureInProgress()) {
         // Do nothing if this is using a different finger.

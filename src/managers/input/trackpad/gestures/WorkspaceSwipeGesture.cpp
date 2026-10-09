@@ -6,6 +6,8 @@
 #include "../../../../render/Renderer.hpp"
 
 #include "../../UnifiedWorkspaceSwipeGesture.hpp"
+#include "../TrackpadGestures.hpp"
+#include "../../../../output/Monitor.hpp"
 
 void CWorkspaceSwipeGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
     ITrackpadGesture::begin(e);
@@ -31,9 +33,28 @@ void CWorkspaceSwipeGesture::update(const ITrackpadGesture::STrackpadGestureUpda
     if (!g_pUnifiedWorkspaceSwipe->isGestureInProgress())
         return;
 
-    const float  DELTA = distance(e);
+    float        DELTA = distance(e);
 
     static auto  PSWIPEINVR = CConfigValue<Config::INTEGER>("gestures:workspace_swipe_invert");
+
+    // A touchscreen swipe fed in as a trackpad one (keystone/11) moves by the finger's
+    // logical px, while the unified swipe maps gestures:workspace_swipe_distance --
+    // touchpad units, 300 by default -- onto a whole monitor: the workspace ran about
+    // four times ahead of the finger on the 1200px panel. Scale THIS STEP so a full
+    // monitor of finger travel is a full workspace. Only the step: the running total
+    // below is the unified swipe's own m_delta, and scaling the sum on every update
+    // (the first version of this, in UnifiedWorkspaceSwipeGesture::update) decayed it
+    // geometrically -- the workspace crept a few px, tracking speed, not position.
+    if (g_pTrackpadGestures->m_fromTouchscreen && g_pUnifiedWorkspaceSwipe->m_monitor && g_pUnifiedWorkspaceSwipe->m_workspaceBegin) {
+        static auto PSWIPEDIST    = CConfigValue<Config::INTEGER>("gestures:workspace_swipe_distance");
+        static auto PWORKSPACEGAP = CConfigValue<Config::INTEGER>("general:gaps_workspaces");
+        const auto  STYLE         = g_pUnifiedWorkspaceSwipe->m_workspaceBegin->m_renderOffset->getStyle();
+        const bool  VERT          = STYLE == "slidevert" || STYLE.starts_with("slidefadevert");
+        const auto  MON           = g_pUnifiedWorkspaceSwipe->m_monitor.lock();
+        const double EXTENT       = (VERT ? MON->m_size.y : MON->m_size.x) + *PWORKSPACEGAP;
+        if (EXTENT > 0)
+            DELTA *= sc<float>(std::clamp(*PSWIPEDIST, sc<int64_t>(1LL), sc<int64_t>(UINT32_MAX)) / EXTENT);
+    }
 
     const double D = g_pUnifiedWorkspaceSwipe->m_delta + (*PSWIPEINVR ? -DELTA : DELTA);
     g_pUnifiedWorkspaceSwipe->update(D);

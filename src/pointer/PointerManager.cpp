@@ -1086,9 +1086,9 @@ void CPointerManager::attachTouch(SP<ITouch> touch) {
         PROTO::idle->onActivity();
     });
 
-    listener->cancel = touch->m_touchEvents.cancel.listen([] {
-        //
-    });
+    // keystone/11: a device cancel withdraws the whole touch sequence -- from clients and
+    // from Lua (input.touch.cancel), so neither keeps fingers that will never lift
+    listener->cancel = touch->m_touchEvents.cancel.listen([] { g_pInputManager->onTouchCancelAll(); });
 
     listener->frame = touch->m_touchEvents.frame.listen([] { g_pSeatManager->sendTouchFrame(); });
 
