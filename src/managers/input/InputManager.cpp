@@ -1003,6 +1003,28 @@ bool CInputManager::isOnResizeBorder(PHLWINDOW w, const Vector2D& coords) {
     return grab.containsPoint(MC) && (!real.containsPoint(MC) || w->presentation().isInCurvedCorner(MC.x, MC.y)) && !w->hasPopupAt(coords);
 }
 
+PHLLS CInputManager::inputLayerAt(const Vector2D& pos) {
+    const auto PMONITOR = State::monitorState()->query().vec(pos).run();
+    Vector2D   local;
+    PHLLS      found;
+
+    // exclusive (keyboard-grabbing) layers first; their popups are found by the monitor-wide
+    // popup lookup below, as 0.57's layerPopupSurfaceAt takes a monitor, not a layer list
+    if (!m_exclusiveKeyboardLSes.empty()) {
+        if (Desktop::viewState()->hitTest().layerSurfaceAt(pos, &m_exclusiveKeyboardLSes, &local, &found) && found)
+            return found;
+    }
+    if (!PMONITOR)
+        return nullptr;
+    if (Desktop::viewState()->hitTest().layerPopupSurfaceAt(pos, PMONITOR, &local, &found) && found)
+        return found;
+    if (Desktop::viewState()->hitTest().layerSurfaceAt(pos, &PMONITOR->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY], &local, &found) && found)
+        return found;
+    if (Desktop::viewState()->hitTest().layerSurfaceAt(pos, &PMONITOR->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_TOP], &local, &found) && found)
+        return found;
+    return nullptr;
+}
+
 bool CInputManager::beginBorderResizeAt(const Vector2D& coords) {
     // callers have just refocus()ed at coords, so a layer surface there (a bar, a panel)
     // shows up here and takes the press instead
