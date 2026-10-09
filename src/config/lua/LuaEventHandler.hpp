@@ -18,6 +18,8 @@ extern "C" {
 #include <lua.h>
 }
 
+struct SEventLoopDoLaterLock;
+
 namespace Config::Lua {
 
     // Manages hl.on() event subscriptions for a single Lua state lifetime.
@@ -58,6 +60,7 @@ namespace Config::Lua {
         size_t                                                 m_dispatchDepth = 0;
         std::vector<CHyprSignalListener>                       m_listeners;
         std::unordered_map<std::string, CHyprSignalListener>   m_pluginListeners;
+        UP<SEventLoopDoLaterLock>                              m_tabletTipLater; // input.tablet.tip, after the cursor warp
 
         static constexpr size_t                                MAX_DISPATCH_DEPTH = 32;
 
