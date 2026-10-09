@@ -133,6 +133,20 @@ namespace Render {
         virtual void                        abortRender();
         CRenderContext&                     context();
 
+        // Dock keystone: mission-control overview / expo (my.sidedock, trapezoid.patch). A
+        // 5-finger gesture toggles it; renderMonitor() draws renderOverview() over the scene;
+        // a click picks a tile. Tiles collected on open, held here. See Renderer.cpp.
+        struct SKsOverviewTile {
+            PHLWINDOWREF window;
+            CBox         box; // on-screen tile rect (physical, monitor-local); set by renderOverview
+        };
+        bool                                m_ksOverviewActive   = false;
+        float                               m_ksOverviewProgress = 0.f; // open/close fade 0..1 (stepped per frame)
+        std::vector<SKsOverviewTile>        m_ksOverviewTiles;
+        void                                ksOverviewToggle();
+        void                                renderOverview(CRenderContext& ctx, PHLMONITOR pMonitor);
+        bool                                ksOverviewSelectAt(const Vector2D& coords);
+
         NColorManagement::PImageDescription workBufferImageDescription(CRenderContext& ctx);
         PHLMONITORREF                       m_mostHzMonitor;
 
