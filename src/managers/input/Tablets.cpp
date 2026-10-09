@@ -86,6 +86,15 @@ static void refocusTablet(SP<CTablet> tab, SP<CTabletTool> tool, bool motion = f
 
     auto local = CURSORPOS - BOX->pos();
 
+    // scale-to-fit (CWindow::fitTransform): BOX is the unscaled surface box, so map the
+    // cursor through the window's scale first, as the pointer path does
+    if (WINDOW) {
+        if (const auto FIT = WINDOW->fitTransform(); FIT.active) {
+            const auto WPOS = WINDOW->position(Desktop::View::IGeometric::GEOMETRIC_GOAL);
+            local           = (CURSORPOS - WPOS - FIT.offset) / FIT.scale - (BOX->pos() - WPOS);
+        }
+    }
+
     if (WINDOW && WINDOW->m_isX11)
         local = local * WINDOW->m_X11SurfaceScaledBy;
 

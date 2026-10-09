@@ -674,7 +674,14 @@ void IHyprRenderer::renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const T
         if ((pWindow->m_isX11 && *PXWLUSENN) || pWindow->m_ruleApplicator->nearestNeighbor().valueOrDefault())
             renderdata.useNearestNeighbor = true;
 
-        if (!TRANSFORMEDWINDOW && pWindow->wlSurface()->small() && !pWindow->wlSurface()->m_fillIgnoreSmall && renderdata.blur) {
+        // Not for scale-to-fit / side-dock windows (fitTransform): this fills the window's FLAT
+        // box with blur behind a client smaller than it, which suits content centred at 1:1 --
+        // but theirs is drawn scaled, and inside a keystone trapezoid, which this rect is not
+        // warped to. It showed as a frosted flat rectangle around a letterboxed Waydroid card,
+        // toggling with focus as Waydroid's size ack came and went.
+        const bool FITCARD = pWindow->m_ruleApplicator &&
+            (pWindow->m_ruleApplicator->m_tagKeeper.isTagged("fit", false) || pWindow->m_ruleApplicator->m_tagKeeper.isTagged("dock", false));
+        if (!TRANSFORMEDWINDOW && !FITCARD && pWindow->wlSurface()->small() && !pWindow->wlSurface()->m_fillIgnoreSmall && renderdata.blur) {
             CBox wb = {renderdata.pos.x - pMonitor->m_position.x, renderdata.pos.y - pMonitor->m_position.y, renderdata.w, renderdata.h};
             wb.scale(pMonitor->m_scale).round();
             CRectPassElement::SRectData data;

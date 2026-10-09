@@ -28,6 +28,28 @@ CBox CSurfacePassElement::getTexBox() {
     auto         PSURFACE                    = Desktop::View::CWLSurface::fromResource(m_data.surface);
 
     CBox         windowBox;
+
+    // Scale-to-fit (CWindow::fitTransform): the window's surface tree -- main surface
+    // and subsurfaces, not popups (squishOversized is false only for those) -- is drawn
+    // scaled about the window origin into the window box, so nothing is cropped.
+    if (m_data.pWindow && m_data.surface && m_data.squishOversized && !m_data.popup) {
+        if (const auto FIT = m_data.pWindow->fitTransform(); FIT.active) {
+            // in logical px: an X11 surface is in XWayland's pixels (CWindow::fitTransform)
+            Vector2D SURFSIZE = m_data.surface->m_current.size;
+            if (m_data.pWindow->m_isX11 && m_data.pWindow->m_X11SurfaceScaledBy > 0)
+                SURFSIZE = SURFSIZE / m_data.pWindow->m_X11SurfaceScaledBy;
+            // a main surface larger than the window is cropped to it (its UVs, ElementRenderer)
+            if (m_data.mainSurface && FIT.crop.x >= 1 && FIT.crop.y >= 1)
+                SURFSIZE = {std::min(SURFSIZE.x, FIT.crop.x), std::min(SURFSIZE.y, FIT.crop.y)};
+            windowBox      = {sc<int>(outputX) + m_data.pos.x + FIT.offset.x + m_data.localPos.x * FIT.scale,
+                              sc<int>(outputY) + m_data.pos.y + FIT.offset.y + m_data.localPos.y * FIT.scale, std::max(SURFSIZE.x * FIT.scale, 2.0),
+                              std::max(SURFSIZE.y * FIT.scale, 2.0)};
+            m_cachedTexBox = windowBox;
+            m_texBoxCached = true;
+            return windowBox;
+        }
+    }
+
     if (m_data.surface && m_data.mainSurface) {
         windowBox = {sc<int>(outputX) + m_data.pos.x + m_data.localPos.x, sc<int>(outputY) + m_data.pos.y + m_data.localPos.y, m_data.w, m_data.h};
 

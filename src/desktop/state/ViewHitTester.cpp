@@ -269,7 +269,16 @@ SP<CWLSurfaceResource> CViewHitTester::windowSurfaceAt(const Vector2D& pos, PHLW
         return PPOPUP->wlSurface()->resource();
     }
 
-    auto [surf, local] = window->wlSurface()->resource()->at(pos - window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL), true);
+    Vector2D ksRel = pos - window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL);
+    // scale-to-fit: window-box coords -> the client's unscaled surface-tree coords; the
+    // letterbox margin around the scaled content is a miss
+    if (const auto FIT = window->fitTransform(); FIT.active) {
+        ksRel = (ksRel - FIT.offset) / FIT.scale;
+        const Vector2D CONTENT = window->wlSurface()->resource()->m_current.size;
+        if (ksRel.x < 0 || ksRel.y < 0 || ksRel.x > CONTENT.x || ksRel.y > CONTENT.y)
+            return nullptr;
+    }
+    auto [surf, local] = window->wlSurface()->resource()->at(ksRel, true);
     if (surf) {
         surfaceLocal = local;
         return surf;
@@ -301,10 +310,15 @@ Vector2D CViewHitTester::surfaceLocalAt(const Vector2D& pos, PHLWINDOW window, S
 
     CBox geom = window->m_xdgSurface->m_current.geometry;
 
-    if (std::get<1>(iterData) == Vector2D{-1337, -1337})
-        return pos - window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL);
+    // scale-to-fit: undo the window's scale before taking the surface offset
+    Vector2D rel = pos - window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL);
+    if (const auto FIT = window->fitTransform(); FIT.active)
+        rel = (rel - FIT.offset) / FIT.scale;
 
-    return pos - window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL) - std::get<1>(iterData) + Vector2D{geom.x, geom.y};
+    if (std::get<1>(iterData) == Vector2D{-1337, -1337})
+        return rel;
+
+    return rel - std::get<1>(iterData) + Vector2D{geom.x, geom.y};
 }
 
 SP<CWLSurfaceResource> CViewHitTester::layerPopupSurfaceAt(const Vector2D& pos, PHLMONITOR monitor, Vector2D* surfaceCoords, PHLLS* layerFound) const {

@@ -75,7 +75,16 @@ void IElementRenderer::calculateUVForSurface(PHLWINDOW pWindow, SP<CWLSurfaceRes
             }
         }
 
-        if (projSize != Vector2D{} && fixMisalignedFSV1) {
+        if (const auto FIT = pWindow ? pWindow->fitTransform() : Desktop::View::CWindow::SFitTransform{}; FIT.active) {
+            // scale-to-fit: the whole buffer maps onto the (scaled) texture box -- but a
+            // main surface larger than the window only its top-left part, the window
+            // (CWindow::fitTransform's crop; SurfacePassElement sizes the box to match)
+            const auto SURFSIZE = pSurface->m_current.size;
+            if (main && FIT.crop.x >= 1 && FIT.crop.y >= 1 && SURFSIZE.x >= 1 && SURFSIZE.y >= 1) {
+                const Vector2D FRAC = (FIT.crop / SURFSIZE).clamp(Vector2D{0, 0}, Vector2D{1, 1});
+                uvBR                = uvTL + (uvBR - uvTL) * FRAC;
+            }
+        } else if (projSize != Vector2D{} && fixMisalignedFSV1) {
             // instead of nearest_neighbor (we will repeat / skip)
             // just cut off / expand surface
             const Vector2D PIXELASUV   = Vector2D{1, 1} / pSurface->m_current.bufferSize;

@@ -212,6 +212,7 @@ std::vector<SP<IValue>> Values::getConfigValues() {
         MS<Float>("decoration:keystone_shadow_dx", "dock keystone: drop-shadow horizontal offset (px, + = right) for dock windows", 0.f, {.min = -400.f, .max = 400.f}),
         MS<Float>("decoration:keystone_shadow_dy", "dock keystone: drop-shadow vertical offset (px, + = down) for dock windows", 0.f, {.min = -400.f, .max = 400.f}),
         MS<Float>("decoration:keystone_shadow_alpha", "dock keystone: drop-shadow strength multiplier for dock windows", 1.f, {.min = 0.f, .max = 1.f}),
+        MS<Float>("decoration:keystone_pip_zoom", "dock PiP: the client is told it is this many times the PiP box (3 = a box a third of the screen lays out like fullscreen)", 3.f, {.min = 1.f, .max = 8.f}),
         MS<Float>("decoration:keystone_parallax", "dock keystone: cursor-parallax lean strength (0 = off)", 0.f, {.min = 0.f, .max = 1.f}),
         MS<Float>("decoration:active_opacity", "opacity of active windows.", 1, {.min = 0, .max = 1, .refresh = Supplementary::REFRESH_WINDOW_STATES}),
         MS<Float>("decoration:inactive_opacity", "opacity of inactive windows.", 1, {.min = 0, .max = 1, .refresh = Supplementary::REFRESH_WINDOW_STATES}),

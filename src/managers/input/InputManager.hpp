@@ -60,6 +60,7 @@ struct STouchData {
     PHLLSREF                touchFocusLS;
     WP<CWLSurfaceResource>  touchFocusSurface;
     Vector2D                touchSurfaceOrigin;
+    double                  touchSurfaceScale = 1.0; // scale-to-fit window: global delta -> surface delta
     Vector2D                lastTouchPos;
 };
 

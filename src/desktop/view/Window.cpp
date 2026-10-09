@@ -1554,8 +1554,10 @@ void CWindow::onX11ConfigureRequest(CBox box) {
 
     g_pHyprRenderer->damageWindow(m_self.lock());
 
+    // A side-dock back card (dockscale) is told a bigger size than its box (realToReportSize);
+    // taking the client's own geometry back as the box would grow the card to it.
     if (!m_isFloating || Fullscreen::controller()->isFullscreen(m_self.lock()) || g_layoutManager->dragController()->target() == layoutTarget() ||
-        (m_suppressedEvents & Desktop::View::SUPPRESS_X11_CONFIGURE_REQUEST)) {
+        (m_suppressedEvents & Desktop::View::SUPPRESS_X11_CONFIGURE_REQUEST) || dockScalePercent() > 0) {
         sendWindowSize(true);
         g_pInputManager->refocus();
         g_pHyprRenderer->damageWindow(m_self.lock());
@@ -1683,12 +1685,52 @@ bool CWindow::isModal() {
 }
 
 Vector2D CWindow::realToReportSize() {
+    // side-dock PiP (tag `pip`): tell the client it is keystone_pip_zoom times the PiP box,
+    // so it lays out for a big virtual screen of the box's own shape (default 3: a box a
+    // third of the screen lays out like fullscreen), and scale-to-fit (fitTransform, which
+    // every dock/pip card gets) shrinks that layout into the box, filling it. Resizing the
+    // box -- or making it tall -- reshapes the layout with it; a larger zoom shrinks text.
+    // side-dock BACK cards (tag `dockscale<P>`, P = the card's size in % of the front card,
+    // set by features/sidedock): tell the client the FRONT card's size -- box / P% -- so it
+    // never re-lays out when it moves back in the pile, and scale-to-fit (fitTransform)
+    // draws it shrunk. The shrink is only apparent, as for Waydroid.
+    // X11 (Wine) back cards too: they were really resized to the smaller box, so the
+    // client re-laid itself out -- a visible refresh -- every time the pile reordered.
+    // Their report size goes through the XWayland scaling below like any other.
+    // side-dock cards (tag `dock`) whose client cannot shrink to the card -- Discord's 940px
+    // minimum width against a 640px card: told the card, the client clamps one side only, lays
+    // out at a shape of its own, and scale-to-fit (one uniform scale) letterboxes it inside the
+    // card. Tell it the card scaled up UNIFORMLY until it meets its minimum: the card's shape,
+    // so the fit fills the card edge to edge.
+    const auto meetMinSize = [this](Vector2D s) {
+        if (m_isX11 || !m_xdgSurface || !m_xdgSurface->m_toplevel || !m_ruleApplicator || !m_ruleApplicator->m_tagKeeper.isTagged("dock", false) || s.x < 1 ||
+            s.y < 1)
+            return s;
+        const auto   MIN = m_xdgSurface->m_toplevel->layoutMinSize();
+        const double K   = std::max({1.0, MIN.x / s.x, MIN.y / s.y});
+        return K > 1.0 ? Vector2D{std::ceil(s.x * K), std::ceil(s.y * K)} : s;
+    };
+
+    Vector2D BOXSIZE = m_realSize->goal();
+    if (const int P = dockScalePercent(); P > 0) {
+        if (!m_isX11)
+            return meetMinSize((BOXSIZE * (100.0 / P)).round());
+        BOXSIZE = BOXSIZE * (100.0 / P);
+    }
+
+    if (!m_isX11 && m_ruleApplicator && m_ruleApplicator->m_tagKeeper.isTagged("pip", false)) {
+        static auto PPIPZOOM = CConfigValue<Config::FLOAT>("decoration:keystone_pip_zoom");
+        const auto  BOX      = m_realSize->goal();
+        if (BOX.x > 0 && BOX.y > 0)
+            return (BOX * std::clamp(sc<double>(*PPIPZOOM), 1.0, 8.0)).round();
+    }
+
     if (!m_isX11)
-        return m_realSize->goal().clamp(Vector2D{0, 0}, Math::VECTOR2D_MAX);
+        return meetMinSize(m_realSize->goal().clamp(Vector2D{0, 0}, Math::VECTOR2D_MAX));
 
     static auto PXWLFORCESCALEZERO = CConfigValue<Config::INTEGER>("xwayland:force_zero_scaling");
 
-    const auto  REPORTSIZE = m_realSize->goal().clamp(Vector2D{1, 1}, Math::VECTOR2D_MAX);
+    const auto  REPORTSIZE = BOXSIZE.clamp(Vector2D{1, 1}, Math::VECTOR2D_MAX);
     const auto  PMONITOR   = m_monitor.lock();
 
     if (*PXWLFORCESCALEZERO && PMONITOR)
@@ -1856,6 +1898,65 @@ SP<CWLSurfaceResource> CWindow::getSolitaryResource() {
     }
 
     return nullptr;
+}
+
+int CWindow::dockScalePercent() const {
+    if (!m_ruleApplicator || !m_ruleApplicator->m_tagKeeper.isTagged("dock", false) || m_ruleApplicator->m_tagKeeper.isTagged("pip", false))
+        return 0;
+    for (auto const& t : m_ruleApplicator->m_tagKeeper.getTags()) {
+        std::string s = t;
+        if (!s.empty() && s.back() == '*')
+            s.pop_back();
+        if (s.size() > 9 && s.starts_with("dockscale") && std::all_of(s.begin() + 9, s.end(), [](char c) { return c >= '0' && c <= '9'; })) {
+            const int P = std::stoi(s.substr(9));
+            return P > 0 && P < 100 ? P : 0;
+        }
+    }
+    return 0;
+}
+
+CWindow::SFitTransform CWindow::fitTransform() const {
+    SFitTransform fit;
+    if (!m_isMapped || !m_ruleApplicator || !m_wlSurface || !m_wlSurface->resource())
+        return fit;
+    const auto& TAGS = m_ruleApplicator->m_tagKeeper;
+    if (!TAGS.isTagged("fit", false) && !TAGS.isTagged("dock", false))
+        return fit;
+
+    // An X11 surface is in XWayland's pixels: m_X11SurfaceScaledBy (the monitor scale under
+    // xwayland:force_zero_scaling) of them per logical px. Compare and scale in logical px,
+    // so input maps to logical surface coords and the usual X11 factor still applies after.
+    Vector2D CONTENT = m_wlSurface->resource()->m_current.size;
+    if (m_isX11 && m_X11SurfaceScaledBy > 0)
+        CONTENT = CONTENT / m_X11SurfaceScaledBy;
+    // The client is its xdg window geometry when it sets one, not its main surface.
+    // Waydroid's main surface is a background stretched to the display size once, when
+    // the window is created; when the display follows a configure (the hwcomposer
+    // hotplugs it) the geometry follows but that background keeps the old size.
+    // Measured by the surface, a portrait display in a stale landscape background was
+    // fitted as landscape: the content a strip at one side, the rest black. Origin 0,0,
+    // as the unfitted path assumes; a larger main surface is cropped to it.
+    Vector2D CROP;
+    if (!m_isX11 && m_xdgSurface) {
+        const auto GEO = m_xdgSurface->m_current.geometry;
+        if (GEO.width >= 1 && GEO.height >= 1) {
+            if (GEO.width < CONTENT.x - 0.5 || GEO.height < CONTENT.y - 0.5)
+                CROP = GEO.size();
+            CONTENT = GEO.size();
+        }
+    }
+    const Vector2D BOX     = size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+    if (CONTENT.x < 1 || CONTENT.y < 1 || BOX.x < 1 || BOX.y < 1)
+        return fit;
+    // within a pixel or so: the client follows its size, draw it 1:1 as usual
+    if (std::abs(CONTENT.x - BOX.x) < 1.5 && std::abs(CONTENT.y - BOX.y) < 1.5)
+        return fit;
+
+    fit.active = true;
+    fit.scale  = std::min(BOX.x / CONTENT.x, BOX.y / CONTENT.y);
+    fit.offset = (BOX - CONTENT * fit.scale) / 2.0;
+    fit.crop   = CROP;
+    return fit;
 }
 
 Vector2D CWindow::getReportedSize() {
@@ -2739,7 +2840,13 @@ void CWindow::commitWindow() {
     if (m_isX11)
         m_reportedSize = m_pendingReportedSize;
 
-    if (!m_isX11 && !Fullscreen::controller()->isFullscreen(m_self.lock()) && m_isFloating) {
+    // scale-to-fit windows (`fit` / side-dock and PiP cards, fitTransform) keep the size the
+    // compositor gave them even below the client's minimum: the oversized surface is drawn
+    // scaled into the box instead. Growing the box (about its centre) pushed a corner-parked
+    // PiP of e.g. Firefox off the monitor.
+    const bool FITTED = m_ruleApplicator && (m_ruleApplicator->m_tagKeeper.isTagged("fit", false) || m_ruleApplicator->m_tagKeeper.isTagged("dock", false));
+
+    if (!m_isX11 && !Fullscreen::controller()->isFullscreen(m_self.lock()) && m_isFloating && !FITTED) {
         const auto MINSIZE = m_xdgSurface->m_toplevel->layoutMinSize();
         const auto MAXSIZE = m_xdgSurface->m_toplevel->layoutMaxSize();
 
@@ -2747,12 +2854,20 @@ void CWindow::commitWindow() {
             g_pHyprRenderer->damageWindow(m_self.lock());
     }
 
+    // a fitted card's report size follows the client's minimum (realToReportSize), which the
+    // client may set or change after it was sized: re-send it (a no-op while it is unchanged)
+    if (!m_isX11 && FITTED)
+        sendWindowSize();
+
     if (!m_workspace->m_visible)
         return;
 
     const auto PMONITOR = m_monitor.lock();
 
     g_pHyprRenderer->damageSurface(wlSurface()->resource(), m_realPosition->goal().x, m_realPosition->goal().y, m_isX11 ? 1.0 / m_X11SurfaceScaledBy : 1.0);
+    // scale-to-fit: the surface damage above is in unscaled coordinates; repaint the window
+    if (fitTransform().active)
+        g_pHyprRenderer->damageWindow(m_self.lock());
 
     if (!m_isX11) {
         m_subsurfaceHead->recheckDamageForSubsurfaces();
