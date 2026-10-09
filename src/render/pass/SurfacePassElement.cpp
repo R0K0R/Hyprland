@@ -7,6 +7,7 @@
 #include "../../managers/input/InputManager.hpp"
 #include "../../layout/LayoutManager.hpp"
 #include "../Renderer.hpp"
+#include "../../config/ConfigValue.hpp"
 
 #include <hyprutils/math/Box.hpp>
 #include <hyprutils/math/Vector2D.hpp>
@@ -119,6 +120,17 @@ std::optional<CBox> CSurfacePassElement::boundingBox() {
 }
 
 CRegion CSurfacePassElement::opaqueRegion() {
+    // Keystoned dock windows (my.sidedock) only visually cover the trapezoid, not
+    // their full rectangular box. Reporting the box as opaque makes the compositor
+    // skip redrawing behind the vacated corners, leaving a frozen chunk of the old
+    // background there. Report NO opaque region so that area is always redrawn.
+    if (m_data.pWindow && m_data.pWindow->m_ruleApplicator && m_data.pWindow->m_ruleApplicator->m_tagKeeper.isTagged("dock", false)) {
+        static auto PKSINSET  = CConfigValue<Config::FLOAT>("decoration:keystone_inset");
+        static auto PKSSHRINK = CConfigValue<Config::FLOAT>("decoration:keystone_shrink");
+        if (*PKSINSET > 0.0001f || *PKSSHRINK > 0.0001f)
+            return {};
+    }
+
     auto        PSURFACE = Desktop::View::CWLSurface::fromResource(m_data.surface);
 
     const float ALPHA = m_data.alpha * m_data.fadeAlpha * (PSURFACE ? PSURFACE->m_alphaModifier * PSURFACE->m_overallOpacity : 1.F);

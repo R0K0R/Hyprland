@@ -1498,6 +1498,179 @@ static GLenum wrapModeToGl(const uint8_t wrapMode) {
     }
 }
 
+static inline void ksMul3(const float* A, const float* B, float* R) {
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) {
+            float s = 0.0f;
+            for (int k = 0; k < 3; ++k)
+                s += A[i * 3 + k] * B[k * 3 + j];
+            R[i * 3 + j] = s;
+        }
+}
+
+// The dock stays on the panel's PHYSICAL right edge (features/sidedock dock.sh geom):
+// logical right at transform 0, bottom at 90, left at 180, top at 270. The keystone is
+// defined for "pinned right edge", so conjugate it into the window frame for the edge the
+// monitor's transform puts it on: H' = R H R^-1, R mapping canonical unit coords to window
+// unit coords -- transpose (90), mirror (180), mirror-then-transpose (270).
+static inline void ksOrientToEdge(float* H, int edge) {
+    if (edge == 0)
+        return;
+    static const float T[9] = {0, 1, 0, 1, 0, 0, 0, 0, 1};
+    static const float M[9] = {-1, 0, 1, 0, 1, 0, 0, 0, 1};
+    float              R[9], Ri[9], tmp[9];
+    if (edge == 1) {
+        for (int i = 0; i < 9; ++i)
+            R[i] = Ri[i] = T[i];
+    } else if (edge == 2) {
+        for (int i = 0; i < 9; ++i)
+            R[i] = Ri[i] = M[i];
+    } else {
+        ksMul3(T, M, R);
+        ksMul3(M, T, Ri);
+    }
+    ksMul3(H, Ri, tmp);
+    ksMul3(R, tmp, H);
+}
+
+// Dock keystone: windows tagged "dock" (my.sidedock) render as a perspective
+// trapezoid. H (Heckbert square-to-quad) warps the WINDOW's unit square; each
+// surface (main OR sub-surface) is a sub-rect of the window, so conjugate H by
+// that sub-rect's window-relative transform T (Tinv*H*T) before folding it into
+// the surface's own projection -- this keeps multi-surface apps (Qt/KDE, e.g.
+// dolphin) composing into ONE trapezoid instead of warping each piece alone. For
+// the main surface T == identity, reducing to base*H. Input mirror: ViewHitTester.
+static inline bool ksInv3(const float* m, float* o) {
+    const float det = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) + m[2] * (m[3] * m[7] - m[4] * m[6]);
+    if (std::abs(det) < 1e-12f)
+        return false;
+    o[0] = (m[4] * m[8] - m[5] * m[7]) / det;
+    o[1] = (m[2] * m[7] - m[1] * m[8]) / det;
+    o[2] = (m[1] * m[5] - m[2] * m[4]) / det;
+    o[3] = (m[5] * m[6] - m[3] * m[8]) / det;
+    o[4] = (m[0] * m[8] - m[2] * m[6]) / det;
+    o[5] = (m[2] * m[3] - m[0] * m[5]) / det;
+    o[6] = (m[3] * m[7] - m[4] * m[6]) / det;
+    o[7] = (m[1] * m[6] - m[0] * m[7]) / det;
+    o[8] = (m[0] * m[4] - m[1] * m[3]) / det;
+    return true;
+}
+
+static std::array<GLfloat, 9> ksDockKeystoneImpl(const std::array<GLfloat, 9>& base, const CBox& surfBox, bool allowParallax);
+
+// `base` is the draw's projection, which may carry a quad TRANSFORM (the frosted-blur pass
+// draws with the monitor's rotation, the window's own pass usually without). The keystone
+// is defined on the box's UNROTATED unit square, so apply it there and the transform after:
+// M = N * conj * (N^-1 * B), N being the same box projected with no transform. Otherwise the
+// frost's trapezoid came out turned against the window's on a rotated screen. With no
+// transform N == B and this is base * conj as before.
+static std::array<GLfloat, 9> ksDockKeystone(const std::array<GLfloat, 9>& base, const CBox& surfBox, bool allowParallax = true) {
+    // not a dock card / keystone off: the projection comes back untouched, nothing to do
+    if (ksDockKeystoneImpl(base, surfBox, allowParallax) == base)
+        return base;
+    const auto N  = g_pHyprRenderer->projectBoxToTarget(surfBox, HYPRUTILS_TRANSFORM_NORMAL).getMatrix();
+    const auto NK = ksDockKeystoneImpl(N, surfBox, allowParallax); // N * conj
+    float      Ni[9], Rt[9];
+    if (!ksInv3(N.data(), Ni))
+        return ksDockKeystoneImpl(base, surfBox, allowParallax);
+    ksMul3(Ni, base.data(), Rt);
+    std::array<GLfloat, 9> M{};
+    ksMul3(NK.data(), Rt, M.data());
+    return M;
+}
+
+static std::array<GLfloat, 9> ksDockKeystoneImpl(const std::array<GLfloat, 9>& base, const CBox& surfBox, bool allowParallax) {
+    const auto w = g_pHyprRenderer->m_renderData.currentWindow;
+    if (!w || !w->m_ruleApplicator || !w->m_ruleApplicator->m_tagKeeper.isTagged("dock", false))
+        return base;
+    static auto PINSET  = CConfigValue<Config::FLOAT>("decoration:keystone_inset");
+    static auto PSHRINK = CConfigValue<Config::FLOAT>("decoration:keystone_shrink");
+    const float inset = *PINSET, shrink = *PSHRINK;
+    if (inset <= 0.0001f && shrink <= 0.0001f)
+        return base;
+    const auto     MON    = g_pHyprRenderer->m_renderData.pMonitor;
+    // surfBox arrives in PHYSICAL (monitor-scaled) output-local coords -- every render
+    // path scales the box by m_scale before drawing (see getTexBox + its callers). But
+    // w->position()/size() are LOGICAL. At scale 1.0 they coincide (T=identity); at a
+    // FRACTIONAL scale they diverge, so the surface->window transform T below came out as
+    // a spurious scale+shift and the trapezoid was shrunk/shifted/skewed. Convert the
+    // window box to the SAME physical space (subtract logical monitor origin, then *scale)
+    // so T is identity for the main surface and a correct fraction for sub-surfaces.
+    const float    MSCALE = MON ? sc<float>(MON->m_scale) : 1.0f;
+    // surfBox also has renderModif applied (workspace slides, zoom); give the window box
+    // the same, or the warp drifts off the window during animations.
+    CBox winBox = {(w->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) - (MON ? MON->m_position : Vector2D{0, 0})) * MSCALE,
+                   w->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT) * MSCALE};
+    g_pHyprRenderer->m_renderData.renderModif.applyToBox(winBox);
+    const Vector2D winPos = winBox.pos();
+    const Vector2D winSz  = winBox.size();
+    if (winSz.x <= 0 || winSz.y <= 0 || surfBox.width <= 0 || surfBox.height <= 0)
+        return base;
+    // H: window unit square -> trapezoid (Heckbert square-to-quad)
+    const float x0 = inset, y0 = shrink, x1 = 1.0f, y1 = 0.0f, x2 = 1.0f, y2 = 1.0f, x3 = inset, y3 = 1.0f - shrink;
+    const float sx = x0 - x1 + x2 - x3, sy = y0 - y1 + y2 - y3;
+    const float dx1 = x1 - x2, dx2 = x3 - x2, dy1 = y1 - y2, dy2 = y3 - y2;
+    const float den = dx1 * dy2 - dx2 * dy1;
+    if (den == 0.0f)
+        return base;
+    const float g = (sx * dy2 - sy * dx2) / den, h = (dx1 * sy - dy1 * sx) / den;
+    const float H[9] = { x1 - x0 + g * x1, x3 - x0 + h * x3, x0,
+                         y1 - y0 + g * y1, y3 - y0 + h * y3, y0,
+                         g,                h,                1.0f };
+    // CURSOR PARALLAX: lean the card toward the pointer. The bottom row of a homography is
+    // pure perspective, so a small centre-pivoted projective tilt (Hp), driven by the
+    // cursor's offset from THIS card's centre, makes each card face the cursor a little --
+    // cards further from it lean more (clamped). Composed BEFORE the keystone (Hc = H*Hp) so
+    // it warps the flat window then the trapezoid maps it. keystone_parallax = strength, 0 = off.
+    float Hc[9];
+    {
+        static auto PPARALLAX = CConfigValue<Config::FLOAT>("decoration:keystone_parallax");
+        const float parallax  = allowParallax ? sc<float>(*PPARALLAX) : 0.0f; // shadow pass passes allowParallax=false
+        if (parallax > 0.0001f) {
+            const Vector2D cur = (g_pInputManager->getMouseCoordsInternal() - (MON ? MON->m_position : Vector2D{0, 0})) * MSCALE;
+            const float    cxp = sc<float>(winPos.x) + sc<float>(winSz.x) * 0.5f;
+            const float    cyp = sc<float>(winPos.y) + sc<float>(winSz.y) * 0.5f;
+            // Clamp the cursor response to <1 card-dimension so a FAR pointer can't max the lean
+            // out (that was the "moves too much" + extreme overflow). Gentle by design.
+            float          px  = std::clamp((sc<float>(cur.x) - cxp) / sc<float>(winSz.x), -0.7f, 0.7f);
+            float          py  = std::clamp((sc<float>(cur.y) - cyp) / sc<float>(winSz.y), -0.7f, 0.7f);
+            const float    gx  = -parallax * px, gy = -parallax * py; // -: near edge toward cursor comes forward
+            // CONTAIN: a perspective lean pushes unit-square corners OUTSIDE [0,1]; the keystone
+            // then maps those past the trapezoid's right edge (the frame) -> they spill out of the
+            // window box and get scissor-clipped into the "7-fragment" mess. So shrink the quad
+            // toward its centre PROPORTIONALLY to the lean (0 at rest, more at the extreme), which
+            // keeps the leaned result inside [0,1]. The scale folds into Pp's top-left (Sf*P). f
+            // floored so a very large strength shrinks rather than inverts.
+            const float    f     = std::clamp(1.0f - (std::abs(gx) + std::abs(gy)), 0.5f, 1.0f);
+            const float    Pp[9] = { f, 0.0f, 0.0f, 0.0f, f, 0.0f, gx, gy, 1.0f };
+            const float    Tc[9] = { 1.0f, 0.0f, 0.5f, 0.0f, 1.0f, 0.5f, 0.0f, 0.0f, 1.0f };
+            const float    Ti[9] = { 1.0f, 0.0f, -0.5f, 0.0f, 1.0f, -0.5f, 0.0f, 0.0f, 1.0f };
+            float          PT[9], Hp[9];
+            ksMul3(Pp, Ti, PT); // Hp = Tc * (Sf*P) * Tc^-1  (shrink+perspective about the unit centre)
+            ksMul3(Tc, PT, Hp);
+            ksMul3(H, Hp, Hc);
+        } else
+            for (int i = 0; i < 9; ++i)
+                Hc[i] = H[i];
+    }
+    ksOrientToEdge(Hc, MON ? (sc<int>(MON->m_transform) % 4) : 0);
+    // T: this surface's unit square -> window unit square (same output-local space)
+    const float tsx = sc<float>(surfBox.width) / sc<float>(winSz.x);
+    const float tsy = sc<float>(surfBox.height) / sc<float>(winSz.y);
+    const float tox = (sc<float>(surfBox.x) - sc<float>(winPos.x)) / sc<float>(winSz.x);
+    const float toy = (sc<float>(surfBox.y) - sc<float>(winPos.y)) / sc<float>(winSz.y);
+    if (tsx == 0.0f || tsy == 0.0f)
+        return base;
+    const float T[9]    = { tsx, 0.0f, tox, 0.0f, tsy, toy, 0.0f, 0.0f, 1.0f };
+    const float Tinv[9] = { 1.0f / tsx, 0.0f, -tox / tsx, 0.0f, 1.0f / tsy, -toy / tsy, 0.0f, 0.0f, 1.0f };
+    float HT[9], conj[9];
+    ksMul3(Hc, T, HT);
+    ksMul3(Tinv, HT, conj);
+    std::array<GLfloat, 9> M{};
+    ksMul3(base.data(), conj, M.data());
+    return M;
+}
+
 void CHyprOpenGLImpl::renderTextureInternal(SP<ITexture> tex, const CBox& box, const STextureRenderData& data) {
     RASSERT(g_pHyprRenderer->m_renderData.pMonitor, "Tried to render texture without begin()!");
     RASSERT(tex, "Attempted to draw nullptr texture!");
@@ -1538,7 +1711,35 @@ void CHyprOpenGLImpl::renderTextureInternal(SP<ITexture> tex, const CBox& box, c
 
     auto shader = renderToOutput ? renderToOutputInternal() : renderToFBInternal(tex, data, tex->m_type, newBox);
 
-    shader->setUniformMatrix3fv(SHADER_PROJ, 1, GL_TRUE, glMatrix.getMatrix());
+    shader->setUniformMatrix3fv(SHADER_PROJ, 1, GL_TRUE, ksDockKeystone(glMatrix.getMatrix(), newBox));
+    // dock keystone: hand surface.frag the corner radius (px) + window size so it draws
+    // anti-aliased ROUNDED edges that follow the trapezoid (keystoneCoverage()). Set for
+    // BOTH the window texture and the separate frosted-blur pass (both come through here),
+    // so their edges coincide. 0 for any non-dock window -> the shader no-ops.
+    {
+        const auto ksWin = g_pHyprRenderer->m_renderData.currentWindow;
+        float      ksR = 0.f, ksSX = 0.f, ksSY = 0.f;
+        if (ksWin && ksWin->m_ruleApplicator && ksWin->m_ruleApplicator->m_tagKeeper.isTagged("dock", false)) {
+            static auto PKSROUND = CConfigValue<Config::FLOAT>("decoration:keystone_rounding");
+            const auto  KSMON    = g_pHyprRenderer->m_renderData.pMonitor;
+            const float KSSCALE  = KSMON ? sc<float>(KSMON->m_scale) : 1.0f;
+            const auto  KSSZ     = ksWin->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+            ksR  = *PKSROUND;
+            // PHYSICAL size (v_boxUV is 0..1, keystoneSize scales it to px): keeps the SDF
+            // distance in physical px so the fwidth() AA feather stays ~1px and the corner
+            // radius is consistent regardless of monitor scale (matches the T fix above).
+            ksSX = sc<float>(KSSZ.x) * KSSCALE;
+            ksSY = sc<float>(KSSZ.y) * KSSCALE;
+        }
+        shader->setUniformFloat(SHADER_KEYSTONE_ROUND, ksR);
+        shader->setUniformFloat2(SHADER_KEYSTONE_SIZE, ksSX, ksSY);
+        // frost pass of a dock card: screen-space sampling of the blurred framebuffer copy
+        const auto KSFB = g_pHyprRenderer->m_renderData.currentFB;
+        if (data.ksScreenUV && ksSX > 0.f && KSFB && KSFB->m_size.x > 0 && KSFB->m_size.y > 0)
+            shader->setUniformFloat2(SHADER_KS_SCREEN_UV, sc<float>(KSFB->m_size.x), sc<float>(KSFB->m_size.y));
+        else
+            shader->setUniformFloat2(SHADER_KS_SCREEN_UV, 0.f, 0.f);
+    }
     shader->setUniformInt(SHADER_TEX, 0);
     GLCALL(glBindVertexArray(shader->getUniformLocation(SHADER_SHADER_VAO)));
 
@@ -2100,6 +2301,7 @@ void CHyprOpenGLImpl::renderTextureWithBlurInternal(SP<ITexture> tex, const CBox
 
                                   .primarySurfaceUVTopLeft     = monitorSpaceBox.pos() / m_renderData.pMonitor->m_transformedSize,
                                   .primarySurfaceUVBottomRight = (monitorSpaceBox.pos() + monitorSpaceBox.size()) / m_renderData.pMonitor->m_transformedSize,
+                                  .ksScreenUV                  = true,
                               });
 
         g_pHyprRenderer->m_renderData.renderModif.enabled = renderModif;
@@ -2362,7 +2564,39 @@ void CHyprOpenGLImpl::renderRoundedShadow(const CBox& box, int round, float roun
 
     if (needsCM)
         shader->setUniformInt(SHADER_SOURCE_TF, TF);
-    shader->setUniformMatrix3fv(SHADER_PROJ, 1, GL_TRUE, glMatrix.getMatrix());
+    // Dock keystone (my.sidedock): warp the drop shadow to the SAME perspective trapezoid as
+    // the window (ksDockKeystone conjugates the homography for this box; it's a no-op for any
+    // non-dock window, so the projection is unchanged there). The shadow.frag runs on the
+    // patched tex vertex shaders that honour projective w, so the soft rounded-box falloff and
+    // the window cutout -- both computed in box space -- warp to the trapezoid together. The
+    // shadow box was already enlarged/offset per-dock in CHyprDropShadowDecoration.
+    // allowParallax=false: the shadow follows the base trapezoid but NOT the cursor lean -- it's
+    // offset+expanded, so inheriting the parallax made it detach/distort ("shits shadows"). The
+    // card leaning off a still shadow actually reads as a nicer lift.
+    shader->setUniformMatrix3fv(SHADER_PROJ, 1, GL_TRUE, ksDockKeystone(glMatrix.getMatrix(), newBox, false));
+    // Dock-window (my.sidedock) shadow tweaks, both gated on the `dock` tag:
+    //   - dim on their own strength knob (keystone_shadow_alpha), leaving other windows' alone;
+    //   - ROUND the shadow to the card's keystone corner radius. The rule gives dock windows
+    //     rounding()=0, so `round` arrives 0 and the shadow drew SHARP corners that poke past the
+    //     card's keystone-rounded corners (decoration:keystone_rounding, drawn by surface.frag's
+    //     coverage SDF -- the keystone pins the RIGHT edge, so at the top-right the trapezoid ==
+    //     the rectangle and the only visible defect is sharp-vs-rounded). keystone_rounding is in
+    //     physical px (the SDF space) and the shadow box is physical too, so it maps straight onto
+    //     the shadow's round + cutout; the keystone proj then warps the rounded box to the
+    //     trapezoid exactly as it does the window texture.
+    static auto PKSROUND      = CConfigValue<Config::FLOAT>("decoration:keystone_rounding");
+    float       ksShadowAlpha = a;
+    int         ksRound       = round;
+    bool        ksDock        = false;
+    {
+        const auto ksW = g_pHyprRenderer->m_renderData.currentWindow;
+        if (ksW && ksW->m_ruleApplicator && ksW->m_ruleApplicator->m_tagKeeper.isTagged("dock", false)) {
+            static auto PKSSHADOWALPHA = CConfigValue<Config::FLOAT>("decoration:keystone_shadow_alpha");
+            ksShadowAlpha              = a * sc<float>(*PKSSHADOWALPHA);
+            ksDock                     = true;
+            ksRound                    = sc<int>(std::round(*PKSROUND));
+        }
+    }
 
     CHyprColor color;
     if (!grad1.m_colors.empty())
@@ -2379,18 +2613,18 @@ void CHyprOpenGLImpl::renderRoundedShadow(const CBox& box, int round, float roun
         shader->setUniform4fv(SHADER_GRADIENT2, grad2.m_colorsOkLabA.size() / 4, grad2.m_colorsOkLabA);
     shader->setUniformInt(SHADER_GRADIENT2_LENGTH, grad2.m_colorsOkLabA.size() / 4);
     shader->setUniformFloat(SHADER_ANGLE2, sc<int>(grad2.m_angle / (std::numbers::pi / 180.0)) % 360 * (std::numbers::pi / 180.0));
-    shader->setUniformFloat(SHADER_ALPHA, a);
+    shader->setUniformFloat(SHADER_ALPHA, ksShadowAlpha);
     shader->setUniformFloat(SHADER_GRADIENT_LERP, lerp);
 
-    const auto TOPLEFT     = Vector2D(range + round, range + round);
-    const auto BOTTOMRIGHT = Vector2D(newBox.width - (range + round), newBox.height - (range + round));
+    const auto TOPLEFT     = Vector2D(range + ksRound, range + ksRound);
+    const auto BOTTOMRIGHT = Vector2D(newBox.width - (range + ksRound), newBox.height - (range + ksRound));
     const auto FULLSIZE    = Vector2D(newBox.width, newBox.height);
 
     // Rounded corners
     shader->setUniformFloat2(SHADER_TOP_LEFT, sc<float>(TOPLEFT.x), sc<float>(TOPLEFT.y));
     shader->setUniformFloat2(SHADER_BOTTOM_RIGHT, sc<float>(BOTTOMRIGHT.x), sc<float>(BOTTOMRIGHT.y));
     shader->setUniformFloat2(SHADER_FULL_SIZE, sc<float>(FULLSIZE.x), sc<float>(FULLSIZE.y));
-    shader->setUniformFloat(SHADER_RADIUS, round);
+    shader->setUniformFloat(SHADER_RADIUS, ksRound);
     shader->setUniformFloat(SHADER_ROUNDING_POWER, roundingPower);
     shader->setUniformFloat(SHADER_RANGE, range);
     shader->setUniformFloat(SHADER_SHADOW_POWER, SHADOWPOWER);
@@ -2427,14 +2661,23 @@ void CHyprOpenGLImpl::renderRoundedShadow(const CBox& box, int round, float roun
                 const auto cutoutTopLeft     = scaledWindowBox.pos() - newBox.pos();
                 const auto cutoutBottomRight = cutoutTopLeft + scaledWindowBox.size();
 
-                float      cutoutRadius = std::max(0.F, sc<float>(PWINDOW->rounding() * m_renderData.pMonitor->m_scale));
+                // dock: the window cutout (the hole the card sits in) must round to the keystone
+                // radius too, else the shadow fills a sharp rectangle corner behind the card's
+                // rounded one. ksDock/PKSROUND from the dock block above; already physical px.
+                float      cutoutRadius = ksDock ? sc<float>(*PKSROUND) : std::max(0.F, sc<float>(PWINDOW->rounding() * m_renderData.pMonitor->m_scale));
                 cutoutRadius            = std::round(cutoutRadius * m_renderData.renderModif.combinedScale());
 
                 shader->setUniformFloat2(SHADER_WINDOW_TOP_LEFT, sc<float>(cutoutTopLeft.x), sc<float>(cutoutTopLeft.y));
                 shader->setUniformFloat2(SHADER_WINDOW_BOTTOM_RIGHT, sc<float>(cutoutBottomRight.x), sc<float>(cutoutBottomRight.y));
                 shader->setUniformFloat(SHADER_THICK, cutoutRadius);
 
-                drawRegion.subtract(scaledWindowBox.copy().expand(-sc<int>(std::round(cutoutRadius))));
+                // Skip the region cut for a dock card: scaledWindowBox is the FLAT window box, but
+                // the card and its shadow are warped to the trapezoid, so cutting the flat box out
+                // clipped the shadow wherever the trapezoid does not cover it -- leaving a shadow
+                // whose inner edge was the straight flat-box edge. The shader's window cutout above
+                // is in box space and warps with the shadow, so it alone hides the card's own area.
+                if (!ksDock)
+                    drawRegion.subtract(scaledWindowBox.copy().expand(-sc<int>(std::round(cutoutRadius))));
             }
         }
     }

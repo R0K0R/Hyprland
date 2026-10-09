@@ -239,6 +239,19 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
     if (MOUSECOORDSFLOORED == m_lastCursorPosFloored && !refocus)
         return;
 
+    // Dock keystone cursor-parallax: cards lean toward the pointer (OpenGL.cpp
+    // ksDockKeystone reads the live cursor), so a real pointer move must re-warp them --
+    // cursor motion doesn't damage window content on its own. Damage every mapped dock
+    // window, only when parallax is enabled (a handful of small windows -> cheap). This
+    // runs past the "didn't actually move" early-return above, so only on genuine motion.
+    {
+        static auto PKSPARALLAX = CConfigValue<Config::FLOAT>("decoration:keystone_parallax");
+        if (*PKSPARALLAX > 0.0001f)
+            for (auto const& w : Desktop::windowState()->windows())
+                if (w && w->m_isMapped && w->m_ruleApplicator && w->m_ruleApplicator->m_tagKeeper.isTagged("dock", false))
+                    g_pHyprRenderer->damageWindow(w);
+    }
+
     static auto PFOLLOWMOUSE          = CConfigValue<Config::INTEGER>("input:follow_mouse");
     static auto PFOLLOWMOUSETHRESHOLD = CConfigValue<Config::FLOAT>("input:follow_mouse_threshold");
     static auto PMOUSEREFOCUS         = CConfigValue<Config::INTEGER>("input:mouse_refocus");

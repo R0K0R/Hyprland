@@ -187,6 +187,9 @@ void CShader::getUniformLocations() {
     m_uniformLocations[SHADER_RADIUS]                    = getUniform("radius");
     m_uniformLocations[SHADER_RADIUS_OUTER]              = getUniform("radiusOuter");
     m_uniformLocations[SHADER_ROUNDING_POWER]            = getUniform("roundingPower");
+    m_uniformLocations[SHADER_KEYSTONE_ROUND]            = getUniform("keystoneRound"); // dock keystone AA/rounding
+    m_uniformLocations[SHADER_KEYSTONE_SIZE]             = getUniform("keystoneSize");
+    m_uniformLocations[SHADER_KS_SCREEN_UV]              = getUniform("ksScreenUV");
     m_uniformLocations[SHADER_THICK]                     = getUniform("thick");
     m_uniformLocations[SHADER_HALFPIXEL]                 = getUniform("halfpixel");
     m_uniformLocations[SHADER_RANGE]                     = getUniform("range");

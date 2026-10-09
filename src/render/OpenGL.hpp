@@ -187,6 +187,11 @@ namespace Render::GL {
             Vector2D               primarySurfaceUVBottomRight = Vector2D(-1, -1);
 
             SMotionBlurData        motionBlur;
+
+            // dock keystone frost pass: sample `tex` (the blurred framebuffer copy) at the
+            // fragment's own framebuffer position instead of its UV, so the blur behind a
+            // warped card is the blur of what is actually behind each pixel.
+            bool ksScreenUV = false;
         };
 
         struct SBorderRenderData {
