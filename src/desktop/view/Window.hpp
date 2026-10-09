@@ -438,6 +438,15 @@ namespace Desktop::View {
         // side-dock back card: P of its `dockscale<P>` tag (its size in % of the front
         // card), or 0 if it has none
         int dockScalePercent() const;
+
+        // Side dock: a card's position moves get their OWN animation config whose curve
+        // overshoots by keystone_bounce * keystone_bounce_decay^depth -- depth from a
+        // `dockd<N>` tag that features/sidedock sets -- so the pile's slide-in bounce is
+        // damped card by card. Per window, because Hyprland reads a curve live: switching
+        // the shared windowsMove curve between cards bent the ones already moving.
+        // Everything else (and a card without a depth tag) keeps windowsMove.
+        SP<Hyprutils::Animation::SAnimationPropertyConfig> m_dockMoveConfig;
+        void                                               updateDockMoveAnimation();
         std::optional<Vector2D>           calculateExpression(const std::string& s);
         std::optional<Vector2D>           calculateExpression(const Math::SExpressionVec2& expr);
         std::optional<Vector2D>           minSize();

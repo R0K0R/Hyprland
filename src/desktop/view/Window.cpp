@@ -1198,6 +1198,49 @@ bool CWindow::visibleOnMonitor(PHLMONITOR pMonitor) {
 void CWindow::setAnimationsToMove() {
     m_realPosition->setConfig(Config::animationTree()->getAnimationPropertyConfig("windowsMove"));
     m_animatingIn = false;
+    updateDockMoveAnimation();
+}
+
+void CWindow::updateDockMoveAnimation() {
+    const auto MOVE = Config::animationTree()->getAnimationPropertyConfig("windowsMove");
+
+    int        depth = -1;
+    if (m_ruleApplicator && m_ruleApplicator->m_tagKeeper.isTagged("dock", false)) {
+        for (auto const& t : m_ruleApplicator->m_tagKeeper.getTags()) {
+            std::string s = t;
+            if (!s.empty() && s.back() == '*')
+                s.pop_back();
+            if (s.size() > 5 && s.starts_with("dockd") && std::all_of(s.begin() + 5, s.end(), [](char c) { return c >= '0' && c <= '9'; })) {
+                depth = std::stoi(s.substr(5));
+                break;
+            }
+        }
+    }
+
+    static auto PBOUNCE = CConfigValue<Config::FLOAT>("decoration:keystone_bounce");
+    static auto PDECAY  = CConfigValue<Config::FLOAT>("decoration:keystone_bounce_decay");
+    if (depth < 0 || m_animatingIn || *PBOUNCE <= 0.0001f) {
+        m_realPosition->setConfig(MOVE);
+        return;
+    }
+
+    // the curve for this depth, straight from the formula; registered on demand
+    const float Y    = 1.f + *PBOUNCE * std::pow(std::clamp(sc<float>(*PDECAY), 0.f, 1.f), depth);
+    const auto  NAME = std::format("__dockbounce_{:.4f}", Y);
+    if (!Animation::mgr()->bezierExists(NAME))
+        Animation::mgr()->addBezierWithName(NAME, Vector2D{0.3, Y}, Vector2D{0.5, 1.0});
+
+    const auto MV = MOVE ? MOVE->pValues.lock() : nullptr;
+    if (!m_dockMoveConfig)
+        m_dockMoveConfig = makeShared<Hyprutils::Animation::SAnimationPropertyConfig>();
+    m_dockMoveConfig->overridden       = true;
+    m_dockMoveConfig->internalBezier   = NAME;
+    m_dockMoveConfig->internalSpeed    = MV ? MV->internalSpeed : 5.f;
+    m_dockMoveConfig->internalEnabled  = MV ? MV->internalEnabled : 1;
+    m_dockMoveConfig->internalStyle    = MV ? MV->internalStyle : "";
+    m_dockMoveConfig->pValues          = m_dockMoveConfig;
+    m_dockMoveConfig->pParentAnimation = MOVE;
+    m_realPosition->setConfig(m_dockMoveConfig);
 }
 
 void CWindow::onWorkspaceAnimUpdate() {
@@ -2144,6 +2187,7 @@ static void setVector2DAnimToMove(WP<CBaseAnimatedVariable> pav) {
 
     if (animvar->m_Context.pWindow) {
         animvar->m_Context.pWindow->m_animatingIn = false;
+        animvar->m_Context.pWindow->updateDockMoveAnimation(); // dock cards: their own curve
 
         if (!animvar->m_Context.pWindow->positionAnimation()->isBeingAnimated() && !animvar->m_Context.pWindow->sizeAnimation()->isBeingAnimated())
             animvar->m_Context.pWindow->resetMotionBlur();
