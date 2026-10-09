@@ -188,11 +188,18 @@ void CInputManager::onTouchMove(ITouch::SMotionEvent e) {
     }
     if (m_touchData.touchFocusLockSurface) {
         const auto PMONITOR     = State::monitorState()->query().id(m_touchData.touchFocusLockSurface->iMonitorID).run();
+        if (!PMONITOR) // see below: the output can be gone mid-touch
+            return;
         const auto TOUCH_COORDS = PMONITOR->m_position + (e.pos * PMONITOR->m_size);
         const auto LOCAL        = TOUCH_COORDS - PMONITOR->m_position;
         g_pSeatManager->sendTouchMotion(e.timeMs, e.touchID, LOCAL);
     } else if (validMapped(m_touchData.touchFocusWindow)) {
         const auto PMONITOR     = m_touchData.touchFocusWindow->m_monitor.lock();
+        // The touched window's monitor can be gone mid-touch: a lid-close handler
+        // disables eDP-1, and a finger moving while the output comes back reached
+        // here with no monitor -- SIGSEGV in onTouchMove (2026-10-08). Drop the motion.
+        if (!PMONITOR)
+            return;
         const auto TOUCH_COORDS = PMONITOR->m_position + (e.pos * PMONITOR->m_size);
         auto       local        = TOUCH_COORDS - m_touchData.touchSurfaceOrigin;
         if (m_touchData.touchFocusWindow->m_isX11)
@@ -201,6 +208,8 @@ void CInputManager::onTouchMove(ITouch::SMotionEvent e) {
         g_pSeatManager->sendTouchMotion(e.timeMs, e.touchID, local);
     } else if (validMapped(m_touchData.touchFocusLS)) {
         const auto PMONITOR     = m_touchData.touchFocusLS->m_monitor.lock();
+        if (!PMONITOR)
+            return;
         const auto TOUCH_COORDS = PMONITOR->m_position + (e.pos * PMONITOR->m_size);
         const auto LOCAL        = TOUCH_COORDS - m_touchData.touchSurfaceOrigin;
 
