@@ -73,6 +73,14 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
         }
     }
 
+    // resize_on_border for touch: a finger landing on a window's border grab zone (wider
+    // than the mouse's, general:touch_border_grab_area) resizes it like a mouse drag there.
+    // One finger at a time; it never reaches the client, and other fingers are unaffected.
+    if (!m_touchBorderResizeID && beginBorderResizeAt(TOUCH_COORDS)) {
+        m_touchBorderResizeID = e.touchID;
+        return;
+    }
+
     // could have abovelock surface, thus only use lock if no ls found
     if (g_pSessionLockManager->isSessionLocked() && m_foundLSToFocus.expired()) {
         m_touchData.touchFocusLockSurface = g_pSessionLockManager->getSessionLockSurfaceForMonitor(PMONITOR->m_id);
@@ -140,6 +148,12 @@ void CInputManager::onTouchUp(ITouch::SUpEvent e) {
     if (info.cancelled)
         return;
 
+    if (m_touchBorderResizeID && *m_touchBorderResizeID == e.touchID) {
+        m_touchBorderResizeID.reset();
+        endBorderResize();
+        return;
+    }
+
     if (g_pUnifiedWorkspaceSwipe->isGestureInProgress()) {
         // If there was a swipe from this finger, end it.
         if (e.touchID == g_pUnifiedWorkspaceSwipe->m_touchID)
@@ -166,6 +180,11 @@ void CInputManager::onTouchMove(ITouch::SMotionEvent e) {
     Event::bus()->m_events.input.touch.motion.emit(e, info);
     if (info.cancelled)
         return;
+
+    if (m_touchBorderResizeID && *m_touchBorderResizeID == e.touchID) {
+        borderResizeMoveTo(m_touchData.lastTouchPos);
+        return;
+    }
 
     if (g_pUnifiedWorkspaceSwipe->isGestureInProgress()) {
         // Do nothing if this is using a different finger.

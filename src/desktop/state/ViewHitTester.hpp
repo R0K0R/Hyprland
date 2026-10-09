@@ -27,6 +27,11 @@ namespace Desktop {
         // the trapezoid. Non-dock windows get the plain flat coord (no behaviour change).
         Vector2D               keystoneSurfaceLocal(const Vector2D& pos, PHLWINDOW window) const;
         Vector2D               keystoneUnwarpGlobal(const Vector2D& pos, PHLWINDOW window) const;
+        // resize_on_border's extend_border_grab_area for this window: widened for a dock PiP
+        // (decoration:keystone_pip_grab) and while the last input was touch
+        // (general:touch_border_grab_area). Every border test uses it, so the hit test, the
+        // cursor icon and the press (mouse, pen, touch) agree on one zone.
+        int                    borderGrabExtend(PHLWINDOW window) const;
         SP<CWLSurfaceResource> layerPopupSurfaceAt(const Vector2D& pos, PHLMONITOR monitor, Vector2D* surfaceCoords, PHLLS* layerFound) const;
         SP<CWLSurfaceResource> layerPopupSurfaceAt(const Vector2D& pos, const std::vector<PHLLSREF>* layerSurfaces, Vector2D* surfaceCoords, PHLLS* layerFound) const;
         SP<CWLSurfaceResource> layerSurfaceAt(const Vector2D& pos, std::vector<PHLLSREF>* layerSurfaces, Vector2D* surfaceCoords, PHLLS* layerFound,

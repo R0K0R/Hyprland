@@ -144,6 +144,16 @@ class CInputManager {
     void               onTouchUp(ITouch::SUpEvent);
     void               onTouchMove(ITouch::SMotionEvent);
 
+    // resize_on_border for pen and touch, which never reach processMouseDownNormal's
+    // border press: the same keystone-aware zone test, then the same MBIND_RESIZE drag,
+    // driven by the cursor (pen) or the touch point warped onto it (touch).
+    bool               isOnResizeBorder(PHLWINDOW w, const Vector2D& coords);
+    bool               beginBorderResizeAt(const Vector2D& coords);
+    void               borderResizeMoveTo(const Vector2D& coords);
+    void               endBorderResize();
+    std::optional<int32_t> m_touchBorderResizeID; // the touch driving a border resize
+    bool               m_tabletBorderResize = false;
+
     void               onSwipeBegin(IPointer::SSwipeBeginEvent);
     void               onSwipeEnd(IPointer::SSwipeEndEvent);
     void               onSwipeUpdate(IPointer::SSwipeUpdateEvent);
