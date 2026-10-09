@@ -809,6 +809,15 @@ void CInputManager::onMouseButton(IPointer::SButtonEvent e, SP<IPointer> mouse) 
 
     m_lastCursorMovement.reset();
 
+    // Dock keystone overview (mission control): while the overlay is up, a press selects the
+    // thumbnail under the cursor (focuses that window) and closes -- it must not fall through to
+    // normal window/button handling. (Release after the close processes normally; harmless.)
+    if (g_pHyprRenderer && g_pHyprRenderer->m_ksOverviewActive) {
+        if (e.state == WL_POINTER_BUTTON_STATE_PRESSED)
+            g_pHyprRenderer->ksOverviewSelectAt(getMouseCoordsInternal());
+        return;
+    }
+
     if (e.state == WL_POINTER_BUTTON_STATE_PRESSED) {
         m_currentlyHeldButtons.push_back(e.button);
     } else {

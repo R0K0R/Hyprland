@@ -14,6 +14,7 @@
 #include "../../../devices/IKeyboard.hpp"
 #include "../../../desktop/rule/windowRule/WindowRule.hpp"
 #include "config/shared/actions/ConfigActions.hpp"
+#include "../../../render/Renderer.hpp" // dock keystone overview: g_pHyprRenderer->ksOverviewToggle()
 
 using namespace Config;
 using namespace Config::Lua;
@@ -332,6 +333,19 @@ static int hlGlobal(lua_State* L) {
 
 static int hlForceRendererReload(lua_State* L) {
     lua_pushcclosure(L, dsp_forceRendererReload, 0);
+    return 1;
+}
+
+// Dock keystone (my.sidedock): toggle the mission-control overview from a keybind, since
+// 5-finger trackpad gestures don't fire on many touchpads. Bound via hl.dsp.overview().
+static int dsp_overview(lua_State* L) {
+    if (g_pHyprRenderer)
+        g_pHyprRenderer->ksOverviewToggle();
+    return Internal::checkResult(L, CA::SActionResult{});
+}
+
+static int hlOverview(lua_State* L) {
+    lua_pushcclosure(L, dsp_overview, 0);
     return 1;
 }
 
@@ -1408,6 +1422,7 @@ void Internal::registerDispatcherBindings(lua_State* L) {
         Internal::setFn(L, "event", hlEvent);
         Internal::setFn(L, "global", hlGlobal);
         Internal::setFn(L, "force_renderer_reload", hlForceRendererReload);
+        Internal::setFn(L, "overview", hlOverview); // dock keystone mission-control toggle (my.sidedock)
         Internal::setFn(L, "force_idle", hlForceIdle);
         Internal::setFn(L, "release_input_capture", hlReleaseInputCapture);
         Internal::setFn(L, "focus", hlFocus);

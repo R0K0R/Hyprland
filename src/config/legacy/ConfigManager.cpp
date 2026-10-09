@@ -53,6 +53,7 @@
 #include "../../managers/input/trackpad/gestures/WorkspaceSwipeGesture.hpp"
 #include "../../managers/input/trackpad/gestures/ResizeGesture.hpp"
 #include "../../managers/input/trackpad/gestures/MoveGesture.hpp"
+#include "../../managers/input/trackpad/gestures/OverviewGesture.hpp"
 #include "../../managers/input/trackpad/gestures/SpecialWorkspaceGesture.hpp"
 #include "../../managers/input/trackpad/gestures/CloseGesture.hpp"
 #include "../../managers/input/trackpad/gestures/FloatGesture.hpp"
@@ -1986,6 +1987,8 @@ std::optional<std::string> CConfigManager::handleGesture(const std::string& comm
         result = g_pTrackpadGestures->addGesture(makeUnique<CResizeTrackpadGesture>(), fingerCount, direction, modMask, deltaScale, disableInhibit);
     else if (data[startDataIdx] == "move")
         result = g_pTrackpadGestures->addGesture(makeUnique<CMoveTrackpadGesture>(), fingerCount, direction, modMask, deltaScale, disableInhibit);
+    else if (data[startDataIdx] == "overview") // dock keystone mission-control toggle (my.sidedock)
+        result = g_pTrackpadGestures->addGesture(makeUnique<COverviewTrackpadGesture>(), fingerCount, direction, modMask, deltaScale, disableInhibit);
     else if (data[startDataIdx] == "special")
         result =
             g_pTrackpadGestures->addGesture(makeUnique<CSpecialWorkspaceGesture>(std::string{data[startDataIdx + 1]}), fingerCount, direction, modMask, deltaScale, disableInhibit);
