@@ -722,6 +722,7 @@ ActionResult Actions::tag(const std::string& tagStr, std::optional<PHLWINDOW> w)
     if (window->m_ruleApplicator->m_tagKeeper.applyTag(tagStr)) {
         window->m_ruleApplicator->propertiesChanged(Desktop::Rule::RULE_PROP_TAG);
         window->presentation().refreshValues();
+        window->updateDockMoveAnimation(); // side dock: depth tag -> its own move curve
     }
 
     return {};

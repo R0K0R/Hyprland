@@ -1148,6 +1148,10 @@ SP<CWLSurfaceResource> CWindow::getSolitaryResource() const {
     return nullptr;
 }
 
+void CWindow::updateDockMoveAnimation() {
+    m_presentation->updateDockMoveAnimation();
+}
+
 int CWindow::dockScalePercent() const {
     if (!m_ruleApplicator || !m_ruleApplicator->m_tagKeeper.isTagged("dock", false) || m_ruleApplicator->m_tagKeeper.isTagged("pip", false))
         return 0;
@@ -1262,6 +1266,7 @@ static void setVector2DAnimToMove(WP<CBaseAnimatedVariable> pav) {
 
     if (animvar->m_Context.pWindow) {
         animvar->m_Context.pWindow->presentation().setAnimatingIn(false);
+        animvar->m_Context.pWindow->presentation().updateDockMoveAnimation(); // dock cards: their own curve
 
         if (!animvar->m_Context.pWindow->positionAnimation()->isBeingAnimated() && !animvar->m_Context.pWindow->sizeAnimation()->isBeingAnimated()) {
             animvar->m_Context.pWindow->effects().reset();

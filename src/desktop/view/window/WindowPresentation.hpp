@@ -89,6 +89,13 @@ namespace Desktop::View {
         void                                              prepareMap();
         void                                              dispatchMap();
         void                                              setAnimationsToMove();
+        // Side dock: a card's position moves get their OWN animation config whose curve
+        // overshoots by keystone_bounce * keystone_bounce_decay^depth -- depth from a
+        // `dockd<N>` tag that features/sidedock sets -- so the pile's slide-in bounce is
+        // damped card by card. Per window, because Hyprland reads a curve live: switching
+        // the shared windowsMove curve between cards bent the ones already moving.
+        // Everything else (and a card without a depth tag) keeps windowsMove.
+        void                                              updateDockMoveAnimation();
         void                                              onWorkspaceAnimUpdate();
         void                                              onFocusAnimUpdate();
         void                                              refreshValues();
@@ -112,6 +119,7 @@ namespace Desktop::View {
         CFloatingOffset                            m_floatingOffset;
         int                                        m_monitorMovedFrom = -1;
         bool                                       m_animatingIn      = false;
+        SP<Hyprutils::Animation::SAnimationPropertyConfig> m_dockMoveConfig;
         CWindowAnimationController                 m_animationController;
     };
 }

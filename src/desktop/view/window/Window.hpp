@@ -261,6 +261,8 @@ namespace Desktop::View {
         // side-dock back card: P of its `dockscale<P>` tag (its size in % of the front
         // card), or 0 if it has none
         int dockScalePercent() const;
+        // side dock: per-card move curve (CWindowPresentation::updateDockMoveAnimation)
+        void updateDockMoveAnimation();
         // The size the client is told it has, for a box of `boxSize` (logical px): the
         // box itself, except for side-dock and PiP cards (see the definition). The
         // backend's logicalToClient (XWayland scaling) applies after.
