@@ -734,6 +734,13 @@ static int hlWorkspaceRule(lua_State* L) {
     return 1;
 }
 
+// hl.gesture_handoff("workspace"): from inside a gesture's `start` callback, give the rest
+// of this swipe to the built-in interactive workspace swipe (CLuaFunctionGesture).
+static int hlGestureHandoff(lua_State* L) {
+    CLuaFunctionGesture::s_requestedHandoff = luaL_checkstring(L, 1);
+    return 0;
+}
+
 static int hlGesture(lua_State* L) {
     if (!lua_istable(L, 1))
         return Internal::configError(L, R"(hl.gesture: expected a table, e.g. { fingers = 3, direction = "horizontal", action = "workspace" })");
@@ -1405,6 +1412,7 @@ void Internal::registerConfigRuleBindings(lua_State* L, CConfigManager* mgr) {
     lua_setfield(L, -2, "plugin");
 
     Internal::setFn(L, "gesture", hlGesture);
+    Internal::setFn(L, "gesture_handoff", hlGestureHandoff);
     Internal::setFn(L, "curve", hlCurve);
     Internal::setFn(L, "animation", hlAnimation);
 }
