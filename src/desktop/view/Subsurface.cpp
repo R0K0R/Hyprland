@@ -193,6 +193,9 @@ void CSubsurface::onCommit() {
     const auto COORDS = coordsGlobal();
 
     g_pHyprRenderer->damageSurface(m_wlSurface->resource(), COORDS.x, COORDS.y);
+    // scale-to-fit (CWindow::fitTransform): that damage is unscaled; repaint the window
+    if (const auto W = m_windowParent.lock(); W && W->fitTransform().active)
+        g_pHyprRenderer->damageWindow(W);
 
     if (m_popupParent && !m_popupParent->inert() && m_popupParent->wlSurface())
         m_popupParent->recheckTree();

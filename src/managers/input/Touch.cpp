@@ -88,17 +88,25 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
     }
 
     Vector2D local;
+    m_touchData.touchSurfaceScale = 1.0;
 
     if (m_touchData.touchFocusLockSurface) {
         local                          = TOUCH_COORDS - PMONITOR->m_position;
         m_touchData.touchSurfaceOrigin = TOUCH_COORDS - local;
     } else if (!m_touchData.touchFocusWindow.expired()) {
         if (m_touchData.touchFocusWindow->m_isX11) {
-            local = (TOUCH_COORDS - m_touchData.touchFocusWindow->position(Desktop::View::IGeometric::GEOMETRIC_GOAL)) * m_touchData.touchFocusWindow->m_X11SurfaceScaledBy;
-            m_touchData.touchSurfaceOrigin = m_touchData.touchFocusWindow->position(Desktop::View::IGeometric::GEOMETRIC_GOAL);
+            // scale-to-fit (an X11 dock back card): logical surface coords first, then the
+            // usual X11 factor -- onTouchMove divides by touchSurfaceScale the same way
+            const auto FIT                 = m_touchData.touchFocusWindow->fitTransform();
+            m_touchData.touchSurfaceScale  = FIT.active ? FIT.scale : 1.0;
+            m_touchData.touchSurfaceOrigin = m_touchData.touchFocusWindow->position(Desktop::View::IGeometric::GEOMETRIC_GOAL) + (FIT.active ? FIT.offset : Vector2D{});
+            local = (TOUCH_COORDS - m_touchData.touchSurfaceOrigin) / m_touchData.touchSurfaceScale * m_touchData.touchFocusWindow->m_X11SurfaceScaledBy;
         } else {
             Desktop::viewState()->hitTest().windowSurfaceAt(TOUCH_COORDS, m_touchData.touchFocusWindow.lock(), local);
-            m_touchData.touchSurfaceOrigin = TOUCH_COORDS - local;
+            // scale-to-fit: local is in the client's unscaled coords, the origin in global ones
+            const auto FIT                 = m_touchData.touchFocusWindow->fitTransform();
+            m_touchData.touchSurfaceScale  = FIT.active ? FIT.scale : 1.0;
+            m_touchData.touchSurfaceOrigin = TOUCH_COORDS - local * m_touchData.touchSurfaceScale;
         }
     } else if (!m_touchData.touchFocusLS.expired()) {
         PHLLS    foundSurf;
@@ -201,7 +209,7 @@ void CInputManager::onTouchMove(ITouch::SMotionEvent e) {
         if (!PMONITOR)
             return;
         const auto TOUCH_COORDS = PMONITOR->m_position + (e.pos * PMONITOR->m_size);
-        auto       local        = TOUCH_COORDS - m_touchData.touchSurfaceOrigin;
+        auto       local        = (TOUCH_COORDS - m_touchData.touchSurfaceOrigin) / m_touchData.touchSurfaceScale;
         if (m_touchData.touchFocusWindow->m_isX11)
             local = local * m_touchData.touchFocusWindow->m_X11SurfaceScaledBy;
 
