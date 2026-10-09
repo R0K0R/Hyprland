@@ -36,6 +36,14 @@ void CFloatTrackpadGesture::begin(const ITrackpadGesture::STrackpadGestureBegin&
     if (!m_window)
         return;
 
+    // Side-dock windows (my.sidedock) must NOT be moved by the touchpad gesture:
+    // dragging a keystoned card out of the cascade breaks it (mirrors the
+    // SUPER+drag gate in features/hyprland). Bail before any move begins.
+    if (m_window->m_ruleApplicator && m_window->m_ruleApplicator->m_tagKeeper.isTagged("dock", false)) {
+        m_window.reset();
+        return;
+    }
+
     if ((m_window->m_isFloating && m_mode == FLOAT_MODE_FLOAT) || (!m_window->m_isFloating && m_mode == FLOAT_MODE_TILE)) {
         m_window.reset();
         return;

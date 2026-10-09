@@ -2,6 +2,8 @@
 
 #include "../../../../desktop/state/FocusState.hpp"
 #include "../../../../desktop/Workspace.hpp"
+#include "../../../../desktop/state/WindowState.hpp"
+#include "../../../../desktop/view/Window.hpp"
 #include "../../../../output/Monitor.hpp"
 #include "../../../../layout/LayoutManager.hpp"
 #include "../../../../layout/algorithm/Algorithm.hpp"
@@ -23,7 +25,22 @@ static Layout::Tiled::CScrollingAlgorithm* currentScrollingLayout() {
     if (!PMONITOR)
         return nullptr;
 
-    const auto PWORKSPACE = PMONITOR->m_activeSpecialWorkspace ? PMONITOR->m_activeSpecialWorkspace : PMONITOR->m_activeWorkspace;
+    // An open special workspace with no TILED windows (the side dock's `dock` workspace,
+    // which holds only floating cards; a scratchpad of floating windows) has no tape to
+    // scroll: drive the regular workspace under it instead, so the swipe keeps working
+    // while the dock is open.
+    auto PWORKSPACE = PMONITOR->m_activeSpecialWorkspace ? PMONITOR->m_activeSpecialWorkspace : PMONITOR->m_activeWorkspace;
+    if (PMONITOR->m_activeSpecialWorkspace) {
+        bool tiled = false;
+        for (auto const& w : Desktop::windowState()->windows()) {
+            if (w && w->m_isMapped && !w->m_isFloating && w->m_workspace == PMONITOR->m_activeSpecialWorkspace) {
+                tiled = true;
+                break;
+            }
+        }
+        if (!tiled)
+            PWORKSPACE = PMONITOR->m_activeWorkspace;
+    }
     if (!PWORKSPACE || !PWORKSPACE->m_space)
         return nullptr;
 

@@ -411,6 +411,10 @@ std::vector<SP<IValue>> Values::getConfigValues() {
          */
 
         MS<Int>("gestures:workspace_swipe_distance", "in px, the distance of the touchpad gesture", 300, {.min = 0, .max = 2000}),
+        MS<String>("gestures:dock_swipe_exec", "side dock: command run on release of a move gesture that began on a dock card, with next/prev/out/hide/none and the front card's address", STRVAL_EMPTY),
+        MS<Float>("gestures:dock_swipe_follow", "side dock: on a swipe away from the dock edge, the fraction of the previous card's travel each deeper card follows (the lag)", 0.75f, {.min = 0.f, .max = 1.f}),
+        MS<Float>("gestures:dock_swipe_pullout", "side dock: a swipe away from the dock edge further than this fraction of the monitor (along the dock axis) pulls the front card out of the dock", 0.35f, {.min = 0.05f, .max = 1.f}),
+        MS<Float>("gestures:dock_swipe_dismiss", "side dock: a swipe toward the dock edge further than this fraction of the monitor (along the dock axis) hides the dock", 0.35f, {.min = 0.05f, .max = 1.f}),
         MS<Bool>("gestures:workspace_swipe_touch", "enable workspace swiping from the edge of a touchscreen", false),
         MS<Bool>("gestures:workspace_swipe_invert", "invert the direction (touchpad only)", true),
         MS<Bool>("gestures:workspace_swipe_touch_invert", "invert the direction (touchscreen only)", false),
