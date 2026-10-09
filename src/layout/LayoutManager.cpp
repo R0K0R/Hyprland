@@ -103,7 +103,7 @@ Config::ErrorResult CLayoutManager::layoutMsg(const std::string_view& sv) {
 }
 
 void CLayoutManager::moveTarget(const Vector2D& Δ, SP<ITarget> target) {
-    if (!target->floating())
+    if (!target || !target->floating() || !target->space())
         return;
 
     target->space()->moveTarget(Δ, target);
