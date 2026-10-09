@@ -94,19 +94,26 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
         local                          = TOUCH_COORDS - PMONITOR->m_position;
         m_touchData.touchSurfaceOrigin = TOUCH_COORDS - local;
     } else if (!m_touchData.touchFocusWindow.expired()) {
+        // Dock keystone: a dock card is drawn as a trapezoid, so the finger is mapped back
+        // through the card's inverse warp (keystoneUnwarpGlobal; the identity for any other
+        // window) and the origin is kept in that UNWARPED frame. onTouchMove re-maps every
+        // point the same way -- a perspective warp is not a fixed offset, so mapping only the
+        // first point let a drag drift away from the finger. X11 cards (Wine) took the flat
+        // box before, so a tap on a tilted card landed beside where it was drawn.
+        const auto UNWARPED = Desktop::viewState()->hitTest().keystoneUnwarpGlobal(TOUCH_COORDS, m_touchData.touchFocusWindow.lock());
         if (m_touchData.touchFocusWindow->m_isX11) {
             // scale-to-fit (an X11 dock back card): logical surface coords first, then the
             // usual X11 factor -- onTouchMove divides by touchSurfaceScale the same way
             const auto FIT                 = m_touchData.touchFocusWindow->fitTransform();
             m_touchData.touchSurfaceScale  = FIT.active ? FIT.scale : 1.0;
             m_touchData.touchSurfaceOrigin = m_touchData.touchFocusWindow->position(Desktop::View::IGeometric::GEOMETRIC_GOAL) + (FIT.active ? FIT.offset : Vector2D{});
-            local = (TOUCH_COORDS - m_touchData.touchSurfaceOrigin) / m_touchData.touchSurfaceScale * m_touchData.touchFocusWindow->m_X11SurfaceScaledBy;
+            local = (UNWARPED - m_touchData.touchSurfaceOrigin) / m_touchData.touchSurfaceScale * m_touchData.touchFocusWindow->m_X11SurfaceScaledBy;
         } else {
             Desktop::viewState()->hitTest().windowSurfaceAt(TOUCH_COORDS, m_touchData.touchFocusWindow.lock(), local);
             // scale-to-fit: local is in the client's unscaled coords, the origin in global ones
             const auto FIT                 = m_touchData.touchFocusWindow->fitTransform();
             m_touchData.touchSurfaceScale  = FIT.active ? FIT.scale : 1.0;
-            m_touchData.touchSurfaceOrigin = TOUCH_COORDS - local * m_touchData.touchSurfaceScale;
+            m_touchData.touchSurfaceOrigin = UNWARPED - local * m_touchData.touchSurfaceScale;
         }
     } else if (!m_touchData.touchFocusLS.expired()) {
         PHLLS    foundSurf;
@@ -209,7 +216,9 @@ void CInputManager::onTouchMove(ITouch::SMotionEvent e) {
         if (!PMONITOR)
             return;
         const auto TOUCH_COORDS = PMONITOR->m_position + (e.pos * PMONITOR->m_size);
-        auto       local        = (TOUCH_COORDS - m_touchData.touchSurfaceOrigin) / m_touchData.touchSurfaceScale;
+        // through the dock keystone's inverse warp, as onTouchDown did (the origin is unwarped)
+        const auto UNWARPED     = Desktop::viewState()->hitTest().keystoneUnwarpGlobal(TOUCH_COORDS, m_touchData.touchFocusWindow.lock());
+        auto       local        = (UNWARPED - m_touchData.touchSurfaceOrigin) / m_touchData.touchSurfaceScale;
         if (m_touchData.touchFocusWindow->m_isX11)
             local = local * m_touchData.touchFocusWindow->m_X11SurfaceScaledBy;
 

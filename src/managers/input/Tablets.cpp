@@ -1,5 +1,6 @@
 #include "InputManager.hpp"
 #include "../../desktop/view/Window.hpp"
+#include "../../desktop/state/ViewState.hpp"
 #include "../../protocols/Tablet.hpp"
 #include "../../devices/Tablet.hpp"
 #include "../../pointer/PointerManager.hpp"
@@ -84,14 +85,19 @@ static void refocusTablet(SP<CTablet> tab, SP<CTabletTool> tool, bool motion = f
         return;
     }
 
-    auto local = CURSORPOS - BOX->pos();
+    // Dock keystone: a dock card is drawn as a trapezoid, so the pen goes through its
+    // inverse warp first, as pointer and touch hits do (keystoneUnwarpGlobal; the identity
+    // for any other window). Without it the pen hit the flat box -- beside the drawn card,
+    // on Wayland and X11 (Wine) cards alike.
+    const auto PENPOS = WINDOW ? Desktop::viewState()->hitTest().keystoneUnwarpGlobal(CURSORPOS, WINDOW) : CURSORPOS;
+    auto       local  = PENPOS - BOX->pos();
 
     // scale-to-fit (CWindow::fitTransform): BOX is the unscaled surface box, so map the
     // cursor through the window's scale first, as the pointer path does
     if (WINDOW) {
         if (const auto FIT = WINDOW->fitTransform(); FIT.active) {
             const auto WPOS = WINDOW->position(Desktop::View::IGeometric::GEOMETRIC_GOAL);
-            local           = (CURSORPOS - WPOS - FIT.offset) / FIT.scale - (BOX->pos() - WPOS);
+            local           = (PENPOS - WPOS - FIT.offset) / FIT.scale - (BOX->pos() - WPOS);
         }
     }
 
