@@ -423,7 +423,7 @@ uint32_t CXDGToplevelResource::setResizing(bool resizing) {
 
 uint32_t CXDGToplevelResource::setSuspeneded(bool sus) {
     if (m_resource->version() < 6)
-        return m_owner->scheduleConfigure(); // SUSPENDED is since 6
+        return m_owner->m_scheduledSerial; // SUSPENDED is since 6: nothing to send an older client
 
     bool set = std::ranges::find(m_pendingApply.states, XDG_TOPLEVEL_STATE_SUSPENDED) != m_pendingApply.states.end();
 
