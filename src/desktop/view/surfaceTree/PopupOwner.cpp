@@ -36,7 +36,9 @@ bool CPopupOwner::hasPopupAt(const Vector2D& vec) const {
     if (popupMappedTreeSize() == 0)
         return false;
 
-    auto popup = popupHead()->at(vec);
+    // input region, not box: an input-transparent popup (a tooltip) is not
+    // "at" the pointer for focus purposes (see CViewHitTester::windowSurfaceAt)
+    auto popup = popupHead()->at(vec, true);
 
     return popup && popup->wlSurface() && popup->wlSurface()->resource();
 }
