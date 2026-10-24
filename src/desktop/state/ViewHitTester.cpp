@@ -260,8 +260,14 @@ SP<CWLSurfaceResource> CViewHitTester::windowSurfaceAt(const Vector2D& pos, PHLW
 
     RASSERT(!window->m_isX11, "Cannot call windowSurfaceAt on an X11 window!");
 
-    // try popups first
-    const auto PPOPUP = window->m_popupHead->at(pos);
+    // try popups first. By their input region, like layer popups below: a
+    // tooltip is an xdg_popup with an EMPTY input region, and hit-testing its
+    // whole box gave it the pointer whenever it opened under the cursor --
+    // the client saw leave on the widget, closed the tooltip, saw enter
+    // again and reopened it, every frame (visible flicker with Firefox and
+    // Electron tooltips near a window's bottom edge, where they flip up onto
+    // the pointer).
+    const auto PPOPUP = window->m_popupHead->at(pos, true);
 
     if (PPOPUP) {
         const auto OFF = PPOPUP->coordsRelativeToParent();
@@ -285,7 +291,7 @@ Vector2D CViewHitTester::surfaceLocalAt(const Vector2D& pos, PHLWINDOW window, S
     if (window->m_isX11)
         return pos - window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL);
 
-    const auto PPOPUP = window->m_popupHead->at(pos);
+    const auto PPOPUP = window->m_popupHead->at(pos, true);
     if (PPOPUP)
         return pos - PPOPUP->coordsGlobal();
 

@@ -1062,7 +1062,9 @@ bool CWindow::hasPopupAt(const Vector2D& pos) {
     if (m_popupHead->popupTreeCount() == 0)
         return false;
 
-    auto popup = m_popupHead->at(pos);
+    // input region, not box: an input-transparent popup (a tooltip) is not
+    // "at" the pointer for focus purposes (see CViewHitTester::windowSurfaceAt)
+    auto popup = m_popupHead->at(pos, true);
 
     return popup && popup->wlSurface()->resource();
 }
