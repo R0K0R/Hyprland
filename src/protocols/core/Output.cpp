@@ -161,6 +161,24 @@ void CWLOutputProtocol::remove() {
 
     m_defunct = true;
     removeGlobal();
+
+    // Surfaces forget this output: a disabled monitor gets no leave() (there is
+    // no bound resource left to send it on), so it stayed in m_enteredOutputs, and
+    // when the monitor came back -- a lid opened -- enter() found it there and sent
+    // nothing. The client never saw an enter for the new global, so a GTK3 window
+    // kept the fallback output's scale and drew at 1x on a 1.5 panel. The client
+    // has been told by the global's removal; only our bookkeeping is due.
+    const auto PMONITOR = m_monitor.lock();
+    if (!PMONITOR)
+        return;
+
+    PROTO::compositor->forEachSurface([PMONITOR](SP<CWLSurfaceResource> surf) {
+        if (std::ranges::find(surf->m_enteredOutputs, PMONITOR) == surf->m_enteredOutputs.end())
+            return;
+
+        std::erase(surf->m_enteredOutputs, PMONITOR);
+        surf->m_events.leave.emit(PMONITOR);
+    });
 }
 
 bool CWLOutputProtocol::isDefunct() {
