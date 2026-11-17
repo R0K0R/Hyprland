@@ -10,6 +10,7 @@
 #include "../state/WorkspaceState.hpp"
 #include "../desktop/state/FocusState.hpp"
 #include "../desktop/view/Group.hpp"
+#include "../desktop/view/Window.hpp"
 #include "../event/EventBus.hpp"
 
 using namespace Layout;
@@ -95,6 +96,13 @@ Config::ErrorResult CLayoutManager::layoutMsg(const std::string_view& sv) {
         return Config::configError("No monitor, can't find ws to target", Config::eConfigErrorLevel::ERROR, Config::eConfigErrorCode::NO_TARGET);
 
     auto ws = MONITOR->m_activeSpecialWorkspace ? MONITOR->m_activeSpecialWorkspace : MONITOR->m_activeWorkspace;
+
+    // With input.special_fallthrough, the keyboard can sit on a window of the
+    // regular workspace while the special one stays shown. A layout message
+    // then belongs to the workspace of the focused window: sent to the special
+    // workspace, it finds no data for that window and does nothing.
+    if (const auto FOCUSED = Desktop::focusState()->window(); ws == MONITOR->m_activeSpecialWorkspace && FOCUSED && FOCUSED->m_workspace == MONITOR->m_activeWorkspace)
+        ws = MONITOR->m_activeWorkspace;
 
     if (!ws)
         return Config::configError("No workspace, can't target", Config::eConfigErrorLevel::ERROR, Config::eConfigErrorCode::NO_TARGET);
