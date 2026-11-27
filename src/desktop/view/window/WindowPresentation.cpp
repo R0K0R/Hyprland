@@ -447,7 +447,7 @@ void CWindowPresentation::updateDockMoveAnimation() {
     }
 
     // the curve for this depth, straight from the formula; registered on demand
-    const float Y    = 1.f + *PBOUNCE * std::pow(std::clamp(sc<float>(*PDECAY), 0.f, 1.f), depth);
+    const float Y    = 1.f + *PBOUNCE * std::pow(std::clamp(sc<float>(*PDECAY), 0.f, 2.f), depth);
     const auto  NAME = std::format("__dockbounce_{:.4f}", Y);
     if (!Animation::mgr()->bezierExists(NAME))
         Animation::mgr()->addBezierWithName(NAME, Vector2D{0.3, Y}, Vector2D{0.5, 1.0});
